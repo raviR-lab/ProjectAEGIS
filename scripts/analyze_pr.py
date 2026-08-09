@@ -19,12 +19,15 @@ def main() -> None:
     parser.add_argument("--pr", type=int, help="Pull request number to analyze")
     parser.add_argument("--deploy", metavar="VERSION", help="Run deployment assessment")
     parser.add_argument("--services", nargs="*", help="Services in the release")
+    parser.add_argument("--fast", action="store_true",
+                        help="Deterministic analysis only (no LLM agents)")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
     orchestrator = AegisOrchestrator()
     if args.pr:
-        report = orchestrator.analyze_pr(args.pr, verbose=args.verbose)
+        report = orchestrator.analyze_pr(args.pr, use_llm=not args.fast,
+                                         verbose=args.verbose)
         print(format_report(report))
     elif args.deploy:
         services = args.services or []

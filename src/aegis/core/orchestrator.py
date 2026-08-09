@@ -9,6 +9,7 @@ fails to follow format, so the pipeline never bricks on a chatty model.
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from crewai import Crew
 
@@ -34,6 +35,12 @@ class AegisReport:
     blast_radius: dict = field(default_factory=dict)
     recommended_tests: list = field(default_factory=list)
     agent_outputs: dict = field(default_factory=dict)
+    pr: dict = field(default_factory=dict)
+    stories: list = field(default_factory=list)
+    story_alignment: dict = field(default_factory=dict)
+    suite_stats: dict = field(default_factory=dict)
+    provenance: dict = field(default_factory=dict)
+    mode: str = "full"
 
 
 def _extract_number(text: str, label: str, fallback: float | None) -> float | None:
@@ -55,6 +62,21 @@ def deterministic_regression(features: dict) -> float:
     if features.get("file_test_coverage_ratio", 0.0) >= 1.0:
         p -= 0.05
     return max(0.05, min(0.95, p))
+
+
+def deterministic_verdict(confidence: float, alignment: str, regression: float) -> str:
+    """Deterministic go/no-go used in fast mode and as a safety fallback.
+
+    Confidence is merge confidence (higher = safer); alignment GAPS never
+    ships without a human review loop.
+    """
+    if alignment == "GAPS" and regression >= 0.4:
+        return "REJECT"
+    if confidence >= 80:
+        return "APPROVE"
+    if confidence >= 50:
+        return "REVIEW"
+    return "REJECT"
 
 
 class AegisOrchestrator:
@@ -79,6 +101,9 @@ class AegisOrchestrator:
         radius = queries.blast_radius(self.cig, pr_number)
         features = queries.risk_features(self.cig, pr_number)
         tests = queries.recommended_tests(self.cig, pr_number)
+        alignment = queries.story_alignment(self.cig, pr_number)
+        total_tests = queries.suite_size(self.cig)
+        recommended = len(tests)
         return {
             "pr": {
                 "number": pr_number,
@@ -93,6 +118,18 @@ class AegisOrchestrator:
             "blast_radius": radius,
             "risk_features": features,
             "recommended_tests": tests,
+            "story_alignment": alignment,
+            "suite_stats": {
+                "total_tests": total_tests,
+                "recommended_tests": recommended,
+                "reduction_pct": round(100 * (total_tests - recommended) / max(total_tests, 1), 1),
+            },
+            "provenance": {
+                "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "graph_stats": queries.graph_stats(self.cig),
+                "release_history": queries.release_history(self.cig),
+                "queries": list(dict.fromkeys(self.cig.trace)),
+            },
         }
 
     def _parse_pr_outputs(self, context: dict, tasks) -> dict:
@@ -134,8 +171,39 @@ class AegisOrchestrator:
             "verdict": verdict,
         }
 
-    def analyze_pr(self, pr_number: int, *, verbose: bool = False) -> AegisReport:
+    def analyze_pr(self, pr_number: int, *, use_llm: bool = True,
+                   verbose: bool = False) -> AegisReport:
         context = self._gather_pr_context(pr_number)
+        features = context["risk_features"]
+        regression = round(deterministic_regression(features), 3)
+        deterministic_conf = round(100 * (1 - regression), 1)
+        det_alignment = context["story_alignment"]["alignment"]
+
+        if not use_llm:
+            confidence = deterministic_conf
+            alignment = det_alignment
+            verdict = deterministic_verdict(confidence, alignment, regression)
+            return AegisReport(
+                pr_number=pr_number,
+                verdict=verdict,
+                merge_confidence=confidence,
+                regression_probability=regression,
+                deterministic_features=features,
+                blast_radius=context["blast_radius"],
+                recommended_tests=context["recommended_tests"],
+                pr=context["pr"],
+                stories=context["stories"],
+                story_alignment=context["story_alignment"],
+                suite_stats=context["suite_stats"],
+                provenance=context["provenance"],
+                mode="fast",
+                agent_outputs={
+                    "alignment": alignment,
+                    "mode": "deterministic",
+                    "raw": {},
+                },
+            )
+
         tasks = build_pr_tasks(self.agents, context)
         crew = Crew(
             agents=list(self.agents.values()),
@@ -154,6 +222,12 @@ class AegisOrchestrator:
             deterministic_features=context["risk_features"],
             blast_radius=context["blast_radius"],
             recommended_tests=context["recommended_tests"],
+            pr=context["pr"],
+            stories=context["stories"],
+            story_alignment=context["story_alignment"],
+            suite_stats=context["suite_stats"],
+            provenance=context["provenance"],
+            mode="full",
             agent_outputs={
                 "alignment": parsed["alignment"],
                 "llm_regression_probability": parsed["llm_regression_probability"],
@@ -224,6 +298,15 @@ def format_report(report: AegisReport) -> str:
             "affected_flows": report.deterministic_features.get("affected_flows", []),
             "past_incidents": report.deterministic_features.get("past_incidents", []),
             "agent_alignment": report.agent_outputs.get("alignment"),
+            "story_alignment": report.story_alignment.get("alignment"),
+            "linked_stories": [s["key"] for s in report.stories],
+            "suite_stats": report.suite_stats,
+            "mode": report.mode,
+            "provenance": {
+                "generated_at": report.provenance.get("generated_at"),
+                "graph_stats": report.provenance.get("graph_stats", {}),
+                "queries": report.provenance.get("queries", []),
+            },
         },
         indent=2,
         default=str,

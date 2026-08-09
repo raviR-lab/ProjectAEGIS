@@ -166,3 +166,23 @@ def ingest_incident(cig, id: str, severity: str, *, status: str,
             f"MERGE (t)-[:{schema.DETECTS}]->(inc)",
             test_id=detected_by_test, id=id,
         )
+
+
+def ingest_release(cig, version: str, *, deployed_at: str | None = None,
+                   status: str | None = None, notes: str | None = None) -> None:
+    cig.run(
+        f"MERGE (r:{schema.RELEASE} {{version: $version}}) "
+        "SET r.deployed_at = COALESCE($deployed_at, r.deployed_at), "
+        "    r.status = COALESCE($status, r.status), "
+        "    r.notes = COALESCE($notes, r.notes)",
+        version=version, deployed_at=deployed_at, status=status, notes=notes,
+    )
+
+
+def link_service_release(cig, microservice: str, version: str) -> None:
+    cig.run(
+        f"MATCH (ms:{schema.MICROSERVICE} {{name: $microservice}}), "
+        f"(r:{schema.RELEASE} {{version: $version}}) "
+        f"MERGE (ms)-[:{schema.RELEASED_IN}]->(r)",
+        microservice=microservice, version=version,
+    )

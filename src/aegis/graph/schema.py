@@ -9,6 +9,7 @@ TEST_CASE = "TestCase"
 API_ROUTE = "ApiRoute"
 CUSTOMER_FLOW = "CustomerFlow"
 INCIDENT = "Incident"
+RELEASE = "Release"
 
 # --- Relationship types ---
 MODIFIES = "MODIFIES"
@@ -20,6 +21,7 @@ EXPOSES = "EXPOSES"
 SUPPORTS = "SUPPORTS"
 HAS_INCIDENT = "HAS_INCIDENT"
 DETECTS = "DETECTS"
+RELEASED_IN = "RELEASED_IN"
 
 # Unique constraint / index statements, idempotent via IF NOT EXISTS.
 SCHEMA_STATEMENTS = [
@@ -31,6 +33,7 @@ SCHEMA_STATEMENTS = [
     f"CREATE CONSTRAINT api_route_key IF NOT EXISTS FOR (n:{API_ROUTE}) REQUIRE n.key IS UNIQUE",
     f"CREATE CONSTRAINT customer_flow_name IF NOT EXISTS FOR (n:{CUSTOMER_FLOW}) REQUIRE n.name IS UNIQUE",
     f"CREATE CONSTRAINT incident_id IF NOT EXISTS FOR (n:{INCIDENT}) REQUIRE n.id IS UNIQUE",
+    f"CREATE CONSTRAINT release_version IF NOT EXISTS FOR (n:{RELEASE}) REQUIRE n.version IS UNIQUE",
 ]
 
 

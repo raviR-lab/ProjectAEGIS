@@ -78,14 +78,31 @@ FLOWS = [
      [("GET", "/orders")]),
 ]
 
+RELEASES = [
+    ("v1.8.0", "2026-07-02T09:00:00Z", "live", "stock reservation rework"),
+    ("v1.9.0", "2026-07-16T09:00:00Z", "live", "gateway reliability fixes"),
+    ("v1.10.0", "2026-07-30T09:00:00Z", "live", "auth key rotation"),
+]
+
+RELEASE_SERVICES = [
+    ("v1.8.0", "inventory-svc"),
+    ("v1.9.0", "payment-svc"),
+    ("v1.9.0", "order-svc"),
+    ("v1.10.0", "auth-svc"),
+]
+
 STORIES = [
     ("AEG-221", "Support refunds via the payment gateway", "in_progress", 5, "Payments"),
     ("AEG-207", "Optimize stock reservation during checkout", "done", 3, "Commerce"),
+    ("AEG-299", "Rotate auth signing keys quarterly", "done", 1, "Platform"),
+    ("AEG-999", "Add dark mode to admin console", "in_progress", 8, "Platform"),
 ]
 
 INCIDENTS = [
     ("INC-1042", "S1", "resolved", "Payment gateway timeout on charge", "payment-svc", "pay-test-charge"),
     ("INC-1011", "S2", "resolved", "Stock over-reservation in checkout", "inventory-svc", "inv-test-stock"),
+    ("INC-2099", "S2", "open", "Order status emails not delivered to customers", "notification-svc", None),
+    ("INC-3301", "S3", "resolved", "Auth token rotation overlapped with active sessions", "auth-svc", "auth-test-token"),
 ]
 
 PRS = [
@@ -98,10 +115,18 @@ PRS = [
         ],
     ),
     (
-        500, "chore: rotate auth signing keys", "bob", "main", "aeg-999",
-        None,
+        500, "chore: rotate auth signing keys", "bob", "main", "aeg-299",
+        "AEG-299",
         [
             {"path": "auth-svc/src/token.py", "additions": 2, "deletions": 2},
+        ],
+    ),
+    (
+        501, "feat: add dark mode to admin console", "carol", "main", "aeg-999",
+        "AEG-999",
+        [
+            {"path": "payment-svc/src/charge.py", "additions": 27, "deletions": 4},
+            {"path": "payment-svc/src/refund.py", "additions": 9, "deletions": 2},
         ],
     ),
 ]
@@ -124,10 +149,27 @@ def seed(cig) -> None:
     for test_id, path in TEST_COVERAGE:
         ingest.link_test_coverage(cig, test_id, path)
 
+    extra_tests = []
+    for i in range(1, 10):
+        extra_tests.append((f"auth-extra-{i:03d}", f"test_auth_extra_{i}", "auth",
+                            "unit", "auth,unit", 0.1, "auth-svc/src/token.py"))
+    for i in range(1, 9):
+        extra_tests.append((f"inv-extra-{i:03d}", f"test_inventory_extra_{i}", "inventory",
+                            "unit", "inventory,unit", 0.2, "inventory-svc/src/stock.py"))
+    for id_, name, suite, ttype, tags, duration, path in extra_tests:
+        ingest.ingest_test_case(cig, id_, name, suite=suite, test_type=ttype,
+                                tags=tags, avg_duration_s=duration)
+        ingest.link_test_coverage(cig, id_, path)
+
     for ms, method, path in ROUTES:
         ingest.ingest_api_route(cig, ms, method, path)
     for name, description, routes in FLOWS:
         ingest.ingest_customer_flow(cig, name, description, *routes)
+
+    for version, deployed_at, status, notes in RELEASES:
+        ingest.ingest_release(cig, version, deployed_at=deployed_at, status=status, notes=notes)
+    for version, microservice in RELEASE_SERVICES:
+        ingest.link_service_release(cig, microservice, version)
 
     for key, title, status, points, epic in STORIES:
         ingest.ingest_jira_story(cig, key, title, status=status, points=points, epic=epic)
@@ -147,10 +189,16 @@ def analyze(cig, pr_number: int) -> None:
     radius = queries.blast_radius(cig, pr_number)
     tests = queries.recommended_tests(cig, pr_number)
     features = queries.risk_features(cig, pr_number)
+    alignment = queries.story_alignment(cig, pr_number)
+    suite = queries.suite_size(cig)
 
     print(f"\n=== PR #{pr_number} analysis ===")
+    print(f"Story alignment: {alignment['alignment']}")
+    print(f"  linked stories: {[s['key'] for s in alignment['linked_stories']]}")
+    for f in alignment["files"]:
+        print(f"  {f['path']}: aligned={f['aligned']} ({f['reason']})")
     print(json.dumps(radius, indent=2, default=str))
-    print("\nRecommended tests:")
+    print(f"\nRecommended tests ({len(tests)} of {suite} in suite):")
     for t in tests:
         print(f"  - {t['id']} ({t['source']})")
     print("\nRisk features:")
@@ -161,6 +209,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pr", type=int, default=None,
                         help="Analyze a single PR after seeding")
+    parser.add_argument("--fast", action="store_true",
+                        help="Run the deterministic (no-LLM) analysis")
     args = parser.parse_args()
 
     cig = CIGClient()
@@ -174,6 +224,7 @@ def main() -> None:
         else:
             analyze(cig, 482)
             analyze(cig, 500)
+            analyze(cig, 501)
     finally:
         cig.close()
 

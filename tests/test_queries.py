@@ -50,6 +50,41 @@ REGRESSION_ROWS = [
      "type": "unit", "duration": 0.2, "incident_ids": ["INC-2099"]},
 ]
 
+STORY_ROWS = [
+    {"key": "AEG-221", "title": "Support refunds via the gateway", "epic": "Payments", "status": "in_progress"},
+]
+
+ALIGN_FILE_ROWS = [
+    {"path": "payment-svc/src/refund.py", "microservice": "payment-svc", "domain": "payments"},
+    {"path": "payment-svc/src/gateway.py", "microservice": "payment-svc", "domain": "payments"},
+]
+
+MISALIGN_FILE_ROWS = [
+    {"path": "payment-svc/src/refund.py", "microservice": "payment-svc", "domain": "payments"},
+    {"path": "payment-svc/src/charge.py", "microservice": "payment-svc", "domain": "payments"},
+]
+
+MISALIGN_STORY_ROWS = [
+    {"key": "AEG-999", "title": "Add dark mode to admin console", "epic": "Platform", "status": "in_progress"},
+]
+
+SUITE_ROWS = [{"total": 24}]
+
+RELEASE_ROWS = [
+    {"version": "v1.9.0", "deployed_at": "2026-07-16T09:00:00Z", "status": "live",
+     "notes": "gateway fixes", "services": ["payment-svc", "order-svc"]},
+]
+
+OPEN_INCIDENT_ROWS = [
+    {"id": "INC-2099", "severity": "S2",
+     "root_cause": "Order status emails not delivered", "service": "notification-svc"},
+]
+
+STATS_ROWS = [
+    {"label": "Microservice", "count": 5},
+    {"label": "Release", "count": 3},
+]
+
 
 class FakeClient:
     def run(self, query, **params):
@@ -61,6 +96,20 @@ class FakeClient:
             return REGRESSION_ROWS
         if "length" in query:
             return UPSTREAM_ROWS
+        if "collect(DISTINCT {key" in query or "RETURN collect(DISTINCT {key" in query:
+            return [{"stories": STORY_ROWS}]
+        if "MATCH (pr" in query and "BELONGS_TO" in query and "RETURN f.path" in query:
+            return ALIGN_FILE_ROWS
+        if "TestCase" in query and "count(t)" in query:
+            return SUITE_ROWS
+        if "RELEASED_IN" in query:
+            return RELEASE_ROWS
+        if "inc.status = 'open'" in query or 'inc.status = "open"' in query:
+            return OPEN_INCIDENT_ROWS
+        if "labels(n)[0]" in query:
+            return STATS_ROWS
+        if "()-[r]->()" in query:
+            return [{"rel": "RELEASED_IN", "count": 4}]
         raise AssertionError(f"unexpected query: {query[:80]}")
 
 
@@ -98,6 +147,43 @@ class QueryLayerTest(unittest.TestCase):
         self.assertEqual(f["past_incidents"], ["INC-1042", "INC-2099"])
         self.assertEqual(f["file_test_coverage_ratio"], 1.0)
         self.assertEqual(f["affected_flows"], ["Checkout Payment", "Order History", "Order Refund"])
+
+    def test_story_alignment_aligned(self):
+        a = queries.story_alignment(self.cig, PR)
+        self.assertEqual(a["alignment"], "ALIGNED")
+        self.assertEqual([s["key"] for s in a["linked_stories"]], ["AEG-221"])
+        self.assertTrue(all(f["aligned"] for f in a["files"]))
+        self.assertEqual(len(a["files"]), 2)
+
+    def test_suite_size(self):
+        self.assertEqual(queries.suite_size(self.cig), 24)
+
+    def test_release_history(self):
+        releases = queries.release_history(self.cig)
+        self.assertEqual(len(releases), 1)
+        self.assertEqual(releases[0]["version"], "v1.9.0")
+        self.assertEqual(releases[0]["services"], ["payment-svc", "order-svc"])
+
+    def test_open_incidents(self):
+        incidents = queries.open_incidents(self.cig)
+        self.assertEqual(len(incidents), 1)
+        self.assertEqual(incidents[0]["id"], "INC-2099")
+        self.assertEqual(incidents[0]["service"], "notification-svc")
+
+
+class MisalignedClient(FakeClient):
+    def run(self, query, **params):
+        if "collect(DISTINCT {key" in query:
+            return [{"stories": MISALIGN_STORY_ROWS}]
+        if "MATCH (pr" in query and "BELONGS_TO" in query and "RETURN f.path" in query:
+            return MISALIGN_FILE_ROWS
+        return super().run(query, **params)
+
+
+class StoryAlignmentGapsTest(unittest.TestCase):
+    def test_gaps(self):
+        a = queries.story_alignment(MisalignedClient(), PR)
+        self.assertEqual(a["alignment"], "GAPS")
 
 
 if __name__ == "__main__":

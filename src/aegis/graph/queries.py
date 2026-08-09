@@ -177,6 +177,85 @@ def risk_features(cig, pr_number: int, *, max_depth: int = 3) -> dict:
     }
 
 
+def story_alignment(cig, pr_number: int) -> dict:
+    """Map each changed file to its linked Jira story.
+
+    A file is "aligned" when its microservice domain matches the epic of at
+    least one linked story. Deterministic — no LLM needed — so the reviewer
+    agent can be verified against it and the demo always renders.
+    """
+    story_rows = cig.run(
+        f"""
+        MATCH (pr:{schema.PULL_REQUEST} {{number: $number}})-[:{schema.ADDRESSES}]->(s:{schema.JIRA_STORY})
+        RETURN collect(DISTINCT {{key: s.key, title: s.title, epic: s.epic, status: s.status}}) AS stories
+        """,
+        number=pr_number,
+    )
+    stories = story_rows[0]["stories"] if story_rows else []
+    stories = [s for s in stories if s.get("key")]
+    epics = {str(s.get("epic") or "").strip().lower() for s in stories}
+
+    file_rows = cig.run(
+        f"""
+        MATCH (pr:{schema.PULL_REQUEST} {{number: $number}})-[:{schema.MODIFIES}]->(f:{schema.CODE_FILE})
+        OPTIONAL MATCH (f)-[:{schema.BELONGS_TO}]->(ms:{schema.MICROSERVICE})
+        RETURN f.path AS path, ms.name AS microservice, ms.domain AS domain
+        """,
+        number=pr_number,
+    )
+
+    files = []
+    for r in file_rows:
+        domain = (r["domain"] or "").strip().lower()
+        aligned = bool(epics) and domain in epics
+        files.append({
+            "path": r["path"],
+            "microservice": r["microservice"],
+            "domain": r["domain"] or "unknown",
+            "aligned": aligned,
+            "reason": "no linked story" if not epics else
+                      f"service domain '{r['domain']}' matches story epic" if aligned else
+                      f"service domain '{r['domain']}' does not match any story epic",
+        })
+
+    return {
+        "pr_number": pr_number,
+        "linked_stories": stories,
+        "files": files,
+        "alignment": "ALIGNED" if files and all(f["aligned"] for f in files) else "GAPS",
+    }
+
+
+def suite_size(cig) -> int:
+    rows = cig.run(f"MATCH (t:{schema.TEST_CASE}) RETURN count(t) AS total")
+    return rows[0]["total"] if rows else 0
+
+
+def release_history(cig) -> list[dict]:
+    rows = cig.run(
+        f"""
+        MATCH (r:{schema.RELEASE})
+        OPTIONAL MATCH (ms:{schema.MICROSERVICE})-[:{schema.RELEASED_IN}]->(r)
+        RETURN r.version AS version, r.deployed_at AS deployed_at, r.status AS status,
+               r.notes AS notes, collect(DISTINCT ms.name) AS services
+        ORDER BY r.deployed_at
+        """
+    )
+    return [dict(r) for r in rows]
+
+
+def open_incidents(cig) -> list[dict]:
+    rows = cig.run(
+        f"""
+        MATCH (ms:{schema.MICROSERVICE})-[:{schema.HAS_INCIDENT}]->(inc:{schema.INCIDENT})
+        WHERE inc.status = 'open'
+        RETURN inc.id AS id, inc.severity AS severity, inc.root_cause AS root_cause,
+               ms.name AS service
+        """
+    )
+    return [dict(r) for r in rows]
+
+
 def graph_stats(cig) -> dict:
     node_rows = cig.run(
         "MATCH (n) RETURN labels(n)[0] AS label, count(*) AS count"

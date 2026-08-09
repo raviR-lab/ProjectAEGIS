@@ -6,6 +6,7 @@ from aegis.core.orchestrator import (
     AegisReport,
     _extract_number,
     deterministic_regression,
+    deterministic_verdict,
     format_report,
 )
 
@@ -49,6 +50,20 @@ class DeterministicRegressionTest(unittest.TestCase):
             "file_test_coverage_ratio": 1.0,
         }
         self.assertLessEqual(deterministic_regression(features), 0.05)
+
+
+class DeterministicVerdictTest(unittest.TestCase):
+    def test_aligned_safe_approve(self):
+        self.assertEqual(deterministic_verdict(95.0, "ALIGNED", 0.05), "APPROVE")
+
+    def test_aligned_risky_review(self):
+        self.assertEqual(deterministic_verdict(54.4, "ALIGNED", 0.456), "REVIEW")
+
+    def test_gaps_reject(self):
+        self.assertEqual(deterministic_verdict(55.8, "GAPS", 0.442), "REJECT")
+
+    def test_low_confidence_reject(self):
+        self.assertEqual(deterministic_verdict(20.0, "ALIGNED", 0.8), "REJECT")
 
 
 class FormatReportTest(unittest.TestCase):
