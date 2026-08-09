@@ -152,6 +152,19 @@ def risk_features(cig, pr_number: int, *, max_depth: int = 3) -> dict:
         if inc
     }
 
+    # Only *resolved* incidents count as regression history. Open incidents are
+    # current problems handled by deployment readiness, not past signal.
+    resolved_rows = cig.run(
+        f"""
+        MATCH (ms:{schema.MICROSERVICE})-[:{schema.HAS_INCIDENT}]->(inc:{schema.INCIDENT})
+        WHERE ms.name IN $affected_services AND inc.status = 'resolved'
+        RETURN collect(DISTINCT inc.id) AS resolved
+        """,
+        affected_services=affected_services,
+    )
+    resolved = set(resolved_rows[0]["resolved"]) if resolved_rows else set()
+    past = incidents & resolved
+
     return {
         "pr_number": pr_number,
         "num_files": len(files),
@@ -170,7 +183,7 @@ def risk_features(cig, pr_number: int, *, max_depth: int = 3) -> dict:
                 for flow in d["flows"]
             }
         ),
-        "past_incidents": sorted(incidents),
+        "past_incidents": sorted(past),
         "file_test_coverage_ratio": sum(
             1 for f in files if f["covered_by_tests"]
         ) / max(len(files), 1),

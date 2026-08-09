@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PROJECT AEGIS — Interactive Architecture Demo</title>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<style>
+  :root {
+    --bg: #05080f;
+    --cyan: #22d3ee;
+    --violet: #a78bfa;
+    --pink: #f472b6;
+    --green: #34d399;
+    --amber: #fbbf24;
+    --rose: #fb7185;
+    --text: #dbe4f5;
+    --muted: #7a8ba8;
+    --grad: linear-gradient(120deg, #22d3ee, #a78bfa 55%, #f472b6);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
+               font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif; color: var(--text); }
+  #scene { position: fixed; inset: 0; }
+
+  /* ---------- INTRO ---------- */
+  #intro { position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column;
+           align-items: center; justify-content: center; text-align: center;
+           background: radial-gradient(900px 600px at 50% 30%, rgba(20,35,70,.55), rgba(5,8,15,.98));
+           transition: opacity .9s ease, visibility .9s; }
+  #intro.hidden { opacity: 0; visibility: hidden; }
+  #intro .title { font-size: clamp(44px, 8vw, 96px); font-weight: 800; letter-spacing: 2px;
+                  background: var(--grad); -webkit-background-clip: text; background-clip: text;
+                  -webkit-text-fill-color: transparent; line-height: 1; }
+  #intro .tag { margin-top: 14px; color: var(--muted); font-size: clamp(14px, 2vw, 19px);
+                letter-spacing: 4px; text-transform: uppercase; }
+  #intro .sub { margin-top: 26px; max-width: 640px; color: #aab8d0; font-size: 15px; line-height: 1.6; }
+  #intro .enter { margin-top: 34px; padding: 14px 44px; border: none; border-radius: 999px;
+                  font-size: 16px; font-weight: 700; color: #06121f; cursor: pointer;
+                  background: var(--grad); box-shadow: 0 0 30px rgba(120,180,255,.4); transition: transform .15s; }
+  #intro .enter:hover { transform: scale(1.06); }
+
+  /* ---------- HUD ---------- */
+  #hud { position: fixed; inset: 0; z-index: 20; pointer-events: none; }
+  #nav { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+         display: flex; gap: 10px; pointer-events: auto; }
+  #nav button { padding: 10px 22px; border-radius: 12px; border: 1px solid rgba(120,150,220,.25);
+                background: rgba(13,19,33,.8); color: var(--muted); font-size: 13px; font-weight: 600;
+                cursor: pointer; letter-spacing: 1px; backdrop-filter: blur(8px); transition: all .25s; }
+  #nav button.active { color: #06121f; border-color: transparent; background: var(--grad);
+                       box-shadow: 0 0 22px rgba(120,180,255,.45); }
+  #nav button:hover:not(.active) { border-color: rgba(120,190,255,.5); color: var(--text); }
+
+  #panel { position: fixed; left: 34px; top: 50%; transform: translateY(-50%); width: 340px;
+           pointer-events: auto; background: rgba(10,15,26,.82); border: 1px solid rgba(120,150,220,.2);
+           border-radius: 18px; padding: 22px 24px; backdrop-filter: blur(14px);
+           box-shadow: 0 20px 60px rgba(0,0,0,.5); transition: opacity .4s ease; }
+  #panel .kick { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: 3px;
+                 text-transform: uppercase; }
+  #panel .head { font-size: 21px; font-weight: 700; margin: 8px 0 10px;
+                 background: var(--grad); -webkit-background-clip: text; background-clip: text;
+                 -webkit-text-fill-color: transparent; }
+  #panel p { color: #b7c4de; font-size: 13.5px; line-height: 1.6; }
+  #panel ul { margin: 10px 0 0 18px; color: #aab8d0; font-size: 13px; line-height: 1.7; }
+  #panel .mini { margin-top: 12px; padding: 10px 12px; border-radius: 10px; font-size: 12.5px;
+                 border: 1px dashed rgba(120,190,255,.3); color: #8fb7dd; }
+  #closeHint { position: fixed; right: 30px; top: 24px; color: var(--muted); font-size: 12px;
+               letter-spacing: 1px; opacity: .8; pointer-events: none; }
+  #clickTip { position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
+              color: var(--muted); font-size: 12px; letter-spacing: 1px; opacity: .7;
+              pointer-events: none; transition: opacity .4s; }
+  #tip { position: fixed; right: 34px; top: 50%; transform: translateY(-50%); width: 300px;
+         background: rgba(10,15,26,.92); border: 1px solid rgba(120,190,255,.35); border-radius: 16px;
+         padding: 18px 20px; opacity: 0; visibility: hidden; transition: all .35s ease;
+         backdrop-filter: blur(14px); box-shadow: 0 0 30px rgba(34,211,238,.15); }
+  #tip.show { opacity: 1; visibility: visible; }
+  #tip .t-head { font-size: 16px; font-weight: 700; }
+  #tip .t-sub { color: var(--muted); font-size: 12px; margin: 4px 0 8px; }
+  #tip .t-body { font-size: 12.5px; color: #b7c4de; line-height: 1.55; }
+  #tip .t-badge { display: inline-block; margin-top: 10px; padding: 4px 12px; border-radius: 999px;
+                  font-weight: 700; font-size: 12px; }
+  #hint { position: fixed; right: 30px; bottom: 26px; color: var(--muted); font-size: 11.5px; letter-spacing: 1px; }
+
+  @media (max-width: 900px) {
+    #panel { left: 16px; right: 16px; width: auto; top: auto; bottom: 120px; transform: none; }
+    #tip { right: 16px; left: 16px; width: auto; top: auto; bottom: 120px; transform: none; }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="scene"></canvas>
+
+<div id="intro">
+  <div class="title">PROJECT AEGIS</div>
+  <div class="tag">AI-driven release shield</div>
+  <div class="sub">
+    A Connected Intelligence Graph (Neo4j) stores your microservice topology, tests and incidents.
+    CrewAI agents reason over it to answer one question before every merge: <b>is it safe to ship?</b>
+  </div>
+  <button class="enter" onclick="enterDemo()">Enter the Graph →</button>
+</div>
+
+<div id="hud">
+  <div id="closeHint">⟵ DRAG TO ORBIT · CLICK NODES</div>
+  <div id="clickTip">click any glowing node to inspect</div>
+
+  <div id="panel"></div>
+  <div id="tip"></div>
+
+  <div id="nav">
+    <button data-c="0" class="active">WHY</button>
+    <button data-c="1">HOW</button>
+    <button data-c="2">WHAT</button>
+    <button data-c="3">LIVE</button>
+  </div>
+  <div id="hint">keys 1–4 switch chapters</div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+/* ================= CONFIG (kept in sync with seed_graph.py) ================= */
+const SERVICES = [
+  { name: 'payment-svc',      domain: 'payments', owner: 'billing-team',   color: 0x22d3ee, pos: new THREE.Vector3(0, 0, 0) },
+  { name: 'order-svc',        domain: 'commerce', owner: 'checkout-team',  color: 0xa78bfa, pos: new THREE.Vector3(4.2, 0, 2.4) },
+  { name: 'inventory-svc',    domain: 'commerce', owner: 'checkout-team',  color: 0xf472b6, pos: new THREE.Vector3(-3.2, 0, 3.6) },
+  { name: 'auth-svc',         domain: 'platform', owner: 'platform-team',  color: 0x34d399, pos: new THREE.Vector3(-4.2, 0, -2.8) },
+  { name: 'notification-svc', domain: 'platform', owner: 'platform-team',  color: 0xfbbf24, pos: new THREE.Vector3(2.6, 0, -3.6) },
+];
+const DEPENDS_ON = [
+  ['order-svc', 'payment-svc'],
+  ['order-svc', 'inventory-svc'],
+  ['notification-svc', 'order-svc'],
+];
+const STORIES = [
+  { key: 'AEG-221', title: 'Refunds via gateway',    epic: 'Payments', status: 'in_progress' },
+  { key: 'AEG-207', title: 'Stock reservation',      epic: 'Commerce', status: 'done' },
+  { key: 'AEG-299', title: 'Rotate auth keys',       epic: 'Platform', status: 'done' },
+  { key: 'AEG-999', title: 'Dark mode admin console', epic: 'Platform', status: 'in_progress' },
+];
+const INCIDENTS = [
+  { id: 'INC-1042', sev: 'S1', svc: 'payment-svc',      status: 'resolved', cause: 'Gateway timeout on charge' },
+  { id: 'INC-1011', sev: 'S2', svc: 'inventory-svc',    status: 'resolved', cause: 'Stock over-reservation' },
+  { id: 'INC-2099', sev: 'S2', svc: 'notification-svc', status: 'open',     cause: 'Order emails not delivered' },
+  { id: 'INC-3301', sev: 'S3', svc: 'auth-svc',         status: 'resolved', cause: 'Token rotation overlap' },
+];
+const PRS = [
+  { number: 482, title: 'Route refunds through gateway', author: 'alice', story: 'AEG-221',
+    verdict: 'REVIEW',  color: 0xfbbf24, conf: 54, regr: 0.46, align: 'ALIGNED',
+    files: ['refund.py', 'gateway.py'], tests: 5 },
+  { number: 500, title: 'Rotate auth signing keys', author: 'bob', story: 'AEG-299',
+    verdict: 'APPROVE', color: 0x34d399, conf: 90, regr: 0.10, align: 'ALIGNED',
+    files: ['token.py'], tests: 10 },
+  { number: 501, title: 'Dark mode admin console', author: 'carol', story: 'AEG-999',
+    verdict: 'REJECT',  color: 0xfb7185, conf: 56, regr: 0.44, align: 'GAPS',
+    files: ['charge.py', 'refund.py'], tests: 5 },
+];
+const RELEASES = ['v1.8.0', 'v1.9.0', 'v1.10.0'];
+const SUITE_TOTAL = 24;      // full automated regression suite in the CIG
+const SUITE_TARGETED = 5;    // recommended for PR #482
+
+/* ================= NARRATION ================= */
+const CHAPTERS = [
+  {
+    key: 'WHY', focus: new THREE.Vector3(0, 0.2, 0), dist: 13, target: new THREE.Vector3(0, 0, 0),
+    kick: 'Chapter 01 · The Problem',
+    head: 'Why a release shield?',
+    body: 'Most regressions do not come from the code you edited — they come from the code you forgot was connected. '
+          + 'A change to payment-svc silently disturbs order-svc and notification-svc through hidden dependencies.',
+    bullets: [
+      'Blast radius: change one service, ripple upstream to every consumer',
+      'Full regression suites are slow: 24 tests to validate 2 files',
+      'Requirements drift: PRs quietly touch code unrelated to their story',
+    ],
+    mini: 'AEGIS cuts the regression suite by ~79% while still covering every affected service.',
+  },
+  {
+    key: 'HOW', focus: new THREE.Vector3(0, 1.2, 0), dist: 16, target: new THREE.Vector3(0, 0, 0),
+    kick: 'Chapter 02 · The Machinery',
+    head: 'How it works',
+    body: 'The CIG does the deterministic math; the agents add judgment. Every analysis is fully traced — '
+          + 'the dashboard shows the exact Cypher executed against Neo4j.',
+    bullets: [
+      'CIG (Neo4j): services, files, tests, routes, flows, incidents, releases',
+      'Deterministic queries: blast_radius, recommended_tests, risk_features, story_alignment',
+      'CrewAI agents: PR Reviewer · Blast Radius · Risk Analyzer · Test Selector · Orchestrator',
+      'Local LLM (Ollama) adds judgment; deterministic math is the safety fallback',
+    ],
+    mini: 'Fast mode runs purely on graph math — instant, offline, repeatable. Agents layer on reasoning.',
+  },
+  {
+    key: 'WHAT', focus: new THREE.Vector3(0, 0.2, 0), dist: 15, target: new THREE.Vector3(0, 0, 0),
+    kick: 'Chapter 03 · The Output',
+    head: 'One verdict per PR',
+    body: 'The agents converge on a single decision you can act on. Each verdict is a trade of confidence, '
+          + 'regression probability and requirements alignment.',
+    bullets: [
+      'PR #500 APPROVE — isolated 4-line change, 90% confidence',
+      'PR #482 REVIEW — refund change with a 3-service blast radius',
+      'PR #501 REJECT — payment files shipped under a Platform story (GAPS)',
+    ],
+    mini: 'Recommended: 5 of 24 tests (−79%) for PR #482. Click a verdict node for details.',
+  },
+  {
+    key: 'LIVE', focus: new THREE.Vector3(0, 0.2, 0), dist: 20, target: new THREE.Vector3(0, 0, 0),
+    kick: 'Chapter 04 · The Runtime',
+    head: 'From graph to dashboard',
+    body: 'The same graph powers the Streamlit dashboard. The provenance panel prints every Cypher query '
+          + 'AEGIS ran for the current analysis, so nothing is a black box.',
+    bullets: [
+      'Neo4j Browser (7474) — explore the raw graph interactively',
+      'Streamlit dashboard (8501) — verdicts, alignment, blast chain, provenance',
+      'CLI — python scripts/analyze_pr.py --pr 482 --fast',
+    ],
+    mini: 'Open Neo4j: MATCH (ms:Microservice)-[:DEPENDS_ON]->(d) RETURN ms, d',
+  },
+];
+
+/* ================= SCENE ================= */
+const canvas = document.getElementById('scene');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x05080f, 0.018);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 200);
+camera.position.set(0, 2, 14);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 4;
+controls.maxDistance = 40;
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 1.1, 0.5, 0.55);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+/* Lights */
+scene.add(new THREE.AmbientLight(0x334466, 0.8));
+const key = new THREE.PointLight(0x66ccff, 2.2, 60); key.position.set(8, 10, 8); scene.add(key);
+const rim = new THREE.PointLight(0xa78bfa, 1.6, 60); rim.position.set(-10, -4, -6); scene.add(rim);
+
+/* Starfield */
+(function buildStars() {
+  const g = new THREE.BufferGeometry();
+  const n = 1400, arr = new Float32Array(n * 3), col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const r = 60 + Math.random() * 80, t = Math.random() * Math.PI * 2, p = Math.acos(2 * Math.random() - 1);
+    arr[i*3] = r * Math.sin(p) * Math.cos(t); arr[i*3+1] = r * Math.sin(p) * Math.sin(t); arr[i*3+2] = r * Math.cos(p);
+    const c = 0.5 + Math.random() * 0.5;
+    col[i*3] = c; col[i*3+1] = c; col[i*3+2] = 1;
+  }
+  g.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const m = new THREE.PointsMaterial({ size: 0.18, vertexColors: true, transparent: true, opacity: 0.9,
+                                        depthWrite: false, blending: THREE.AdditiveBlending });
+  scene.add(new THREE.Points(g, m));
+})();
+
+/* ================= HELPERS ================= */
+function glowTexture(inner, outer) {
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  const grd = ctx.createRadialGradient(128, 128, 4, 128, 128, 128);
+  grd.addColorStop(0, inner); grd.addColorStop(1, outer);
+  ctx.fillStyle = grd; ctx.fillRect(0, 0, 256, 256);
+  return new THREE.CanvasTexture(c);
+}
+function makeLabel(text, color = '#dbe4f5', size = 44) {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.font = `600 ${size}px 'Segoe UI', Arial, sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(20,40,80,0.9)'; ctx.shadowBlur = 18;
+  ctx.fillStyle = color; ctx.fillText(text, 256, 64);
+  const tex = new THREE.CanvasTexture(c);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  sp.scale.set(4.4, 1.1, 1);
+  return sp;
+}
+function makeNode(service, radius = 0.85) {
+  const grp = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: service.color, emissive: service.color,
+                                               emissiveIntensity: 0.55, roughness: 0.3, metalness: 0.2 });
+  const core = new THREE.Mesh(new THREE.IcosahedronGeometry(radius, 1), mat);
+  grp.add(core);
+  const halo = new THREE.Mesh(new THREE.SphereGeometry(radius * 1.45, 24, 24),
+    new THREE.MeshBasicMaterial({ map: glowTexture('rgba(150,200,255,0.55)', 'rgba(0,0,0,0)'),
+                                  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+  grp.add(halo);
+  grp.userData = { service, type: 'service' };
+  const label = makeLabel(service.name, '#cfe0ff', 40);
+  label.position.y = radius + 1.35; label.userData = { type: 'label' };
+  grp.add(label);
+  scene.add(grp);
+  return grp;
+}
+function makeEdge(a, b, color = 0x335588) {
+  const mid = a.clone().lerp(b, 0.5).multiplyScalar(1.12);
+  const curve = new THREE.QuadraticBezierCurve3(a, mid, b);
+  const pts = curve.getPoints(32);
+  const g = new THREE.BufferGeometry().setFromPoints(pts);
+  const m = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.55 });
+  const line = new THREE.Line(g, m);
+  scene.add(line);
+  return { curve, line };
+}
+function makeRing(color, r) {
+  const m = new THREE.Mesh(new THREE.RingGeometry(r * 0.94, r, 64),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7, side: THREE.DoubleSide,
+                                  blending: THREE.AdditiveBlending, depthWrite: false }));
+  m.rotation.x = -Math.PI / 2;
+  scene.add(m);
+  return m;
+}
+function makeOrb(color, r = 0.5) {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 20),
+    new THREE.MeshBasicMaterial({ map: glowTexture('rgba(190,225,255,0.9)', 'rgba(0,0,0,0)'),
+                                  transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+  m.userData = { baseColor: color, orbR: r };
+  scene.add(m);
+  return m;
+}
+
+/* ================= GRAPH ================= */
+const serviceNodes = {};
+SERVICES.forEach(s => { serviceNodes[s.name] = makeNode(s); });
+
+const edges = DEPENDS_ON.map(([a, b]) => makeEdge(serviceNodes[a].position, serviceNodes[b].position, 0x4a6fa5));
+const dataPackets = [];
+edges.forEach(({ curve, line }, ei) => {
+  for (let i = 0; i < 2; i++) {
+    const p = makeOrb(0x88ccff, 0.09);
+    p.userData = { curve, t: i / 2, speed: 0.15 + Math.random() * 0.12, ei };
+    scene.add(p);
+    dataPackets.push(p);
+  }
+});
+
+/* Orbiting domain satellites: stories, incidents, releases, tests */
+const satellites = [];
+function addSatellite(parent, color, r, y, label, desc, type) {
+  const grp = new THREE.Group();
+  const orb = makeOrb(color, 0.32);
+  orb.position.set(r, y, 0);
+  grp.add(orb);
+  const tag = makeLabel(label, '#8fb7dd', 34); tag.scale.set(2.6, 0.7, 1);
+  tag.position.set(r, y + 0.85, 0);
+  grp.add(tag);
+  grp.userData = { desc, label, color, type };
+  parent.add(grp);
+  satellites.push({ grp, r, y });
+  return grp;
+}
+addSatellite(serviceNodes['payment-svc'],      0x22d3ee, 2.1, 0.4,  'INC-1042', 'S1 resolved · Gateway timeout on charge', 'incident');
+addSatellite(serviceNodes['inventory-svc'],    0xf472b6, 2.1, 0.4,  'INC-1011', 'S2 resolved · Stock over-reservation', 'incident');
+addSatellite(serviceNodes['notification-svc'], 0xfb7185, 2.2, 0.5,  'INC-2099', 'S2 OPEN · Order emails not delivered', 'incident');
+addSatellite(serviceNodes['auth-svc'],         0x34d399, 2.1, 0.4,  'INC-3301', 'S3 resolved · Token rotation overlap', 'incident');
+addSatellite(serviceNodes['order-svc'],        0xa78bfa, 2.2, 0.5,  'AEG-221', 'Epic Payments · in_progress', 'story');
+addSatellite(serviceNodes['order-svc'],        0xa78bfa, 2.2, -0.6, 'AEG-207', 'Epic Commerce · done', 'story');
+addSatellite(serviceNodes['auth-svc'],         0x34d399, 2.2, -0.5, 'AEG-299', 'Epic Platform · done', 'story');
+
+/* Suite visualization: full vs targeted (ring segments) */
+const suiteFull = makeRing(0x335588, 5.4); suiteFull.visible = false;
+const suiteTarget = makeRing(0x34d399, 3.1); suiteTarget.visible = false;
+
+/* PR verdict nodes for chapter WHAT */
+const prNodes = PRS.map(pr => {
+  const grp = new THREE.Group();
+  const disc = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.7, 0.35, 48),
+    new THREE.MeshStandardMaterial({ color: pr.color, emissive: pr.color, emissiveIntensity: 0.7,
+                                     roughness: 0.25, metalness: 0.3 }));
+  disc.rotation.x = Math.PI / 2;
+  grp.add(disc);
+  const glow = new THREE.Mesh(new THREE.CylinderGeometry(2.3, 2.3, 0.4, 48),
+    new THREE.MeshBasicMaterial({ map: glowTexture('rgba(200,230,255,0.5)', 'rgba(0,0,0,0)'),
+                                  transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+  glow.rotation.x = Math.PI / 2; glow.position.y = -0.05;
+  grp.add(glow);
+  const verdictLabel = makeLabel(`#${pr.number}  ${pr.verdict}`, '#06121f', 40);
+  verdictLabel.scale.set(3.4, 0.85, 1); verdictLabel.position.y = 0.02;
+  grp.add(verdictLabel);
+  const titleLabel = makeLabel(pr.title, '#cfe0ff', 34); titleLabel.scale.set(3.0, 0.75, 1);
+  titleLabel.position.y = -1.9;
+  grp.add(titleLabel);
+  const subLabel = makeLabel(`conf ${pr.conf}% · regr ${pr.regr} · ${pr.align}`, '#8fb7dd', 30);
+  subLabel.scale.set(2.8, 0.7, 1); subLabel.position.y = -2.7;
+  grp.add(subLabel);
+  grp.userData = { type: 'pr', pr };
+  scene.add(grp);
+  return grp;
+});
+/* place verdict nodes in a wide arc */
+const prPositions = [new THREE.Vector3(-5.5, 0, -2), new THREE.Vector3(0, 0, 0), new THREE.Vector3(5.5, 0, -2)];
+prNodes.forEach((n, i) => n.position.copy(prPositions[i]));
+
+/* Chapter camera targets */
+const chapterCam = CHAPTERS.map(ch => {
+  const v = ch.focus.clone().normalize().multiplyScalar(ch.dist);
+  return { cam: v, tgt: ch.target.clone(), room: ch.key };
+});
+
+/* ================= PANEL / NAV ================= */
+const panelEl = document.getElementById('panel');
+const tipEl = document.getElementById('tip');
+const navBtns = [...document.querySelectorAll('#nav button')];
+let chapter = 0;
+
+function renderChapter(i) {
+  chapter = i;
+  navBtns.forEach((b, k) => b.classList.toggle('active', k === i));
+  const ch = CHAPTERS[i];
+  panelEl.innerHTML = `
+    <div class="kick">${ch.kick}</div>
+    <div class="head">${ch.head}</div>
+    <p>${ch.body}</p>
+    <ul>${ch.bullets.map(b => `<li>${b}</li>`).join('')}</ul>
+    <div class="mini">${ch.mini}</div>`;
+  hideTip();
+  // toggle chapter-only visuals
+  suiteFull.visible = i === 0;
+  suiteTarget.visible = i === 0;
+  prNodes.forEach((n, k) => { n.visible = i === 2; });
+  dataPackets.forEach(p => { p.visible = i !== 2; });
+}
+function hideTip() { tipEl.classList.remove('show'); }
+function showTip(html) { tipEl.innerHTML = html; tipEl.classList.add('show'); }
+
+navBtns.forEach((b, k) => b.addEventListener('click', () => { renderChapter(k); animateToChapter(k); }));
+addEventListener('keydown', e => {
+  const n = parseInt(e.key, 10);
+  if (n >= 1 && n <= 4) { renderChapter(n - 1); animateToChapter(n - 1); }
+});
+
+function animateToChapter(i) {
+  const t = chapterCam[i];
+  const c0 = camera.position.clone(), t0 = controls.target.clone();
+  const c1 = t.cam.clone(), t1 = t.tgt.clone();
+  const start = performance.now(), dur = 1200;
+  (function tick(now) {
+    const k = Math.min(1, (now - start) / dur), e = 1 - Math.pow(1 - k, 3);
+    camera.position.lerpVectors(c0, c1, e);
+    controls.target.lerpVectors(t0, t1, e);
+    if (k < 1) requestAnimationFrame(tick);
+  })(start);
+}
+
+/* ================= RAYCAST INTERACTIONS ================= */
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2(-2, -2);
+const clickables = [...Object.values(serviceNodes), ...satellites.map(s => s.grp), ...prNodes];
+let hovered = null;
+
+function pick(clientX, clientY) {
+  mouse.x = (clientX / innerWidth) * 2 - 1;
+  mouse.y = -(clientY / innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  for (const obj of clickables) {
+    const hits = raycaster.intersectObject(obj, true);
+    if (hits.some(h => h.object.userData.type !== 'label')) return obj;
+  }
+  return null;
+}
+addEventListener('click', e => {
+  const hit = pick(e.clientX, e.clientY);
+  if (!hit) { hideTip(); return; }
+  const u = hit.userData;
+  if (u.type === 'service') {
+    const s = u.service;
+    showTip(`<div class="t-head" style="color:#${s.color.toString(16).padStart(6,'0')}">${s.name}</div>
+      <div class="t-sub">microservice</div>
+      <div class="t-body">domain <b>${s.domain}</b> · owner <b>${s.owner}</b><br>
+      runs ${(Math.random() * 8 + 2).toFixed(0)} API routes · sits on the dependency chain below.</div>
+      <span class="t-badge" style="background:rgba(34,211,238,.15);color:#7ff0c6">${s.domain}</span>`);
+  } else if (u.type === 'pr') {
+    const p = u.pr;
+    const styleMap = { APPROVE: 'rgba(52,211,153,.15);color:#7ff0c6', REVIEW: 'rgba(251,191,36,.15);color:#ffd98a', REJECT: 'rgba(251,113,133,.15);color:#ffb3c1' };
+    showTip(`<div class="t-head">PR #${p.number} — ${p.verdict}</div>
+      <div class="t-sub">${p.title} · by ${p.author} · ${p.story}</div>
+      <div class="t-body">files: ${p.files.join(', ')}<br>
+      merge confidence <b>${p.conf}%</b> · regression probability <b>${p.regr}</b><br>
+      requirements: <b>${p.align}</b> · recommended <b>${p.tests} of ${SUITE_TOTAL}</b> tests</div>
+      <span class="t-badge" style="background:${styleMap[p.verdict]}">${p.verdict}</span>`);
+  } else if (u.type === 'incident') {
+    showTip(`<div class="t-head">${u.label}</div><div class="t-sub">incident</div>
+      <div class="t-body">${u.desc}</div>`);
+  } else if (u.type === 'story') {
+    showTip(`<div class="t-head">${u.label}</div><div class="t-sub">Jira story</div>
+      <div class="t-body">${u.desc}</div>`);
+  }
+});
+
+/* ================= ANIMATION ================= */
+const clock = new THREE.Clock();
+let suiteAnim = 0;
+
+function animate() {
+  const dt = clock.getDelta();
+  const t = clock.elapsedTime;
+
+  // gentle bob for service nodes + spin satellites
+  for (const n of Object.values(serviceNodes)) {
+    n.position.y = Math.sin(t * 0.6 + n.position.x * 0.7) * 0.08;
+  }
+  satellites.forEach(({ grp }, i) => {
+    grp.rotation.y = t * 0.5 + i * 2.1;
+  });
+
+  // data packets travelling along edges
+  dataPackets.forEach(p => {
+    const d = p.userData;
+    d.t += dt * d.speed;
+    if (d.t > 1) d.t -= 1;
+    p.position.copy(d.curve.getPoint(d.t));
+    const s = 0.7 + Math.sin(t * 6 + d.t * 20) * 0.3;
+    p.scale.set(s, s, s);
+  });
+
+  // chapter 0 suite-cut animation: full ring contracts to target ring
+  if (suiteFull.visible) {
+    suiteAnim += dt * 0.5;
+    const k = (Math.sin(suiteAnim * Math.PI * 2) + 1) / 2;
+    suiteFull.scale.set(1 + k * 1.2, 1 + k * 1.2, 1 + k * 1.2);
+    suiteFull.material.opacity = 0.5 - k * 0.35;
+    suiteTarget.material.opacity = 0.3 + k * 0.6;
+    suiteTarget.scale.setScalar(0.9 + (1 - k) * 0.25);
+  }
+
+  // verdict nodes float
+  prNodes.forEach((n, i) => {
+    n.position.y = Math.sin(t * 0.8 + i * 2.4) * 0.25;
+  });
+
+  controls.update();
+  composer.render();
+  requestAnimationFrame(animate);
+}
+
+/* ================= RESIZE / INIT ================= */
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+});
+
+window.enterDemo = () => {
+  document.getElementById('intro').classList.add('hidden');
+  renderChapter(0);
+  animateToChapter(0);
+  animate();
+};
+</script>
+</body>
+</html>

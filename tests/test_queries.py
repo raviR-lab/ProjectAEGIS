@@ -80,6 +80,8 @@ OPEN_INCIDENT_ROWS = [
      "root_cause": "Order status emails not delivered", "service": "notification-svc"},
 ]
 
+RESOLVED_ROWS = [{"resolved": ["INC-1042"]}]
+
 STATS_ROWS = [
     {"label": "Microservice", "count": 5},
     {"label": "Release", "count": 3},
@@ -106,6 +108,8 @@ class FakeClient:
             return RELEASE_ROWS
         if "inc.status = 'open'" in query or 'inc.status = "open"' in query:
             return OPEN_INCIDENT_ROWS
+        if "inc.status = 'resolved'" in query or 'inc.status = "resolved"' in query:
+            return RESOLVED_ROWS
         if "labels(n)[0]" in query:
             return STATS_ROWS
         if "()-[r]->()" in query:
@@ -144,7 +148,7 @@ class QueryLayerTest(unittest.TestCase):
         self.assertEqual(f["num_files"], 2)
         self.assertEqual(f["churn"], 56)
         self.assertEqual(f["num_affected_services"], 3)
-        self.assertEqual(f["past_incidents"], ["INC-1042", "INC-2099"])
+        self.assertEqual(f["past_incidents"], ["INC-1042"])
         self.assertEqual(f["file_test_coverage_ratio"], 1.0)
         self.assertEqual(f["affected_flows"], ["Checkout Payment", "Order History", "Order Refund"])
 
