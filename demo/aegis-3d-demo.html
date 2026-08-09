@@ -89,6 +89,9 @@
   #tip .t-badge { display: inline-block; margin-top: 10px; padding: 4px 12px; border-radius: 999px;
                   font-weight: 700; font-size: 12px; }
   #hint { position: fixed; right: 30px; bottom: 26px; color: var(--muted); font-size: 11.5px; letter-spacing: 1px; }
+  #legend { position: fixed; left: 34px; bottom: 26px; display: flex; gap: 16px; pointer-events: none; }
+  #legend .lg { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; letter-spacing: 1px; }
+  #legend i { width: 12px; height: 12px; display: inline-block; flex: none; }
 
   @media (max-width: 900px) {
     #panel { left: 16px; right: 16px; width: auto; top: auto; bottom: 120px; transform: none; }
@@ -111,8 +114,15 @@
 </div>
 
 <div id="hud">
-  <div id="closeHint">⟵ DRAG TO ORBIT · CLICK NODES</div>
-  <div id="clickTip">click any glowing node to inspect</div>
+  <div id="closeHint">⟵ DRAG SPACE TO ORBIT 360° · DRAG NODES · CLICK TO INSPECT</div>
+  <div id="clickTip">click a node to inspect · drag it to rearrange · drag empty space to orbit</div>
+
+  <div id="legend">
+    <span class="lg"><i style="background:var(--cyan);border-radius:50%"></i>service</span>
+    <span class="lg"><i style="background:var(--rose);transform:rotate(45deg)"></i>incident</span>
+    <span class="lg"><i style="background:var(--violet)"></i>story</span>
+    <span class="lg"><i style="border:2px solid var(--amber);background:none;border-radius:50%"></i>release</span>
+  </div>
 
   <div id="panel"></div>
   <div id="tip"></div>
@@ -148,10 +158,10 @@ const DEPENDS_ON = [
   ['notification-svc', 'order-svc'],
 ];
 const STORIES = [
-  { key: 'AEG-221', title: 'Refunds via gateway',    epic: 'Payments', status: 'in_progress' },
-  { key: 'AEG-207', title: 'Stock reservation',      epic: 'Commerce', status: 'done' },
-  { key: 'AEG-299', title: 'Rotate auth keys',       epic: 'Platform', status: 'done' },
-  { key: 'AEG-999', title: 'Dark mode admin console', epic: 'Platform', status: 'in_progress' },
+  { key: 'AEG-221', title: 'Refunds via gateway',    epic: 'Payments', status: 'in_progress', svc: 'payment-svc' },
+  { key: 'AEG-207', title: 'Stock reservation',      epic: 'Commerce', status: 'done',        svc: 'order-svc' },
+  { key: 'AEG-299', title: 'Rotate auth keys',       epic: 'Platform', status: 'done',        svc: 'auth-svc' },
+  { key: 'AEG-999', title: 'Dark mode admin console', epic: 'Platform', status: 'in_progress', svc: 'payment-svc' },
 ];
 const INCIDENTS = [
   { id: 'INC-1042', sev: 'S1', svc: 'payment-svc',      status: 'resolved', cause: 'Gateway timeout on charge' },
@@ -170,7 +180,11 @@ const PRS = [
     verdict: 'REJECT',  color: 0xfb7185, conf: 56, regr: 0.44, align: 'GAPS',
     files: ['charge.py', 'refund.py'], tests: 5 },
 ];
-const RELEASES = ['v1.8.0', 'v1.9.0', 'v1.10.0'];
+const RELEASES = [
+  { id: 'v1.8.0',  date: '2026-05-12', svc: ['inventory-svc', 'order-svc'] },
+  { id: 'v1.9.0',  date: '2026-06-24', svc: ['payment-svc', 'order-svc'] },
+  { id: 'v1.10.0', date: '2026-07-18', svc: ['notification-svc', 'auth-svc'] },
+];
 const SUITE_TOTAL = 24;      // full automated regression suite in the CIG
 const SUITE_TARGETED = 5;    // recommended for PR #482
 
@@ -190,7 +204,7 @@ const CHAPTERS = [
     mini: 'AEGIS cuts the regression suite by ~79% while still covering every affected service.',
   },
   {
-    key: 'HOW', focus: new THREE.Vector3(0, 1.2, 0), dist: 16, target: new THREE.Vector3(0, 0, 0),
+    key: 'HOW', focus: new THREE.Vector3(0, -0.25, 1), dist: 15, target: new THREE.Vector3(0, -2.2, -4.5),
     kick: 'Chapter 02 · The Machinery',
     head: 'How it works',
     body: 'The CIG does the deterministic math; the agents add judgment. Every analysis is fully traced — '
@@ -234,6 +248,7 @@ const CHAPTERS = [
 /* ================= SCENE ================= */
 const canvas = document.getElementById('scene');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.domElement.style.cursor = 'grab';
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -287,17 +302,36 @@ function glowTexture(inner, outer) {
   ctx.fillStyle = grd; ctx.fillRect(0, 0, 256, 256);
   return new THREE.CanvasTexture(c);
 }
-function makeLabel(text, color = '#dbe4f5', size = 44) {
-  const c = document.createElement('canvas'); c.width = 512; c.height = 128;
+function makeLabel(text, color = '#dbe4f5', size = 44, pill = 'dark') {
+  const c = document.createElement('canvas'); c.width = 1024; c.height = 256;
   const ctx = c.getContext('2d');
-  ctx.font = `600 ${size}px 'Segoe UI', Arial, sans-serif`;
+  const font = `700 ${size}px 'Segoe UI', Arial, sans-serif`;
+  ctx.font = font;
+  const w = ctx.measureText(text).width + 70, h = size + 38;
+  if (pill && pill !== 'none' && ctx.roundRect) {
+    const fill = pill === 'light' ? 'rgba(244,249,255,0.95)' : 'rgba(5,8,15,0.90)';
+    ctx.beginPath();
+    ctx.roundRect((1024 - w) / 2, (256 - h) / 2, w, h, h / 2);
+    ctx.fillStyle = fill; ctx.fill();
+  }
+  ctx.font = font;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.shadowColor = 'rgba(20,40,80,0.9)'; ctx.shadowBlur = 18;
-  ctx.fillStyle = color; ctx.fillText(text, 256, 64);
+  ctx.fillStyle = color;
+  ctx.shadowColor = 'rgba(0,0,0,0.55)'; ctx.shadowBlur = 4; ctx.shadowOffsetY = 1;
+  ctx.fillText(text, 512, 130);
   const tex = new THREE.CanvasTexture(c);
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
-  sp.scale.set(4.4, 1.1, 1);
+  sp.scale.set(4.6, 1.15, 1);
   return sp;
+}
+const interactables = [];
+function addHit(group, radius, x = 0, y = 0, z = 0) {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(radius, 12, 8),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  m.position.set(x, y, z);
+  group.add(m);
+  interactables.push({ group, hit: m });
+  return m;
 }
 function makeNode(service, radius = 0.85) {
   const grp = new THREE.Group();
@@ -310,21 +344,29 @@ function makeNode(service, radius = 0.85) {
                                   transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
   grp.add(halo);
   grp.userData = { service, type: 'service' };
-  const label = makeLabel(service.name, '#cfe0ff', 40);
+  const label = makeLabel(service.name, '#e6eeff', 40, 'dark');
   label.position.y = radius + 1.35; label.userData = { type: 'label' };
   grp.add(label);
+  grp.position.copy(service.pos);
   scene.add(grp);
+  addHit(grp, 1.7);
   return grp;
 }
-function makeEdge(a, b, color = 0x335588) {
-  const mid = a.clone().lerp(b, 0.5).multiplyScalar(1.12);
-  const curve = new THREE.QuadraticBezierCurve3(a, mid, b);
-  const pts = curve.getPoints(32);
-  const g = new THREE.BufferGeometry().setFromPoints(pts);
-  const m = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.55 });
-  const line = new THREE.Line(g, m);
-  scene.add(line);
-  return { curve, line };
+function makeEdge(a, b, { color = 0x4a9fd8, radius = 0.03, opacity = 0.55, bend = 0.28, parent = scene } = {}) {
+  const geom = { a, b, color, radius, opacity, bend, curve: null, mesh: null, parent };
+  a.edges = a.edges || []; a.edges.push(geom);
+  b.edges = b.edges || []; b.edges.push(geom);
+  geom.refresh = () => {
+    const A = a.position, B = b.position;
+    const mid = A.clone().lerp(B, 0.5).add(new THREE.Vector3(0, A.distanceTo(B) * geom.bend, 0));
+    geom.curve = new THREE.QuadraticBezierCurve3(A, mid, B);
+    const g = new THREE.TubeGeometry(geom.curve, 24, geom.radius, 6, false);
+    if (geom.mesh) { parent.remove(geom.mesh); geom.mesh.geometry.dispose(); }
+    geom.mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: geom.color, transparent: true, opacity: geom.opacity, depthWrite: false }));
+    parent.add(geom.mesh);
+  };
+  geom.refresh();
+  return geom;
 }
 function makeRing(color, r) {
   const m = new THREE.Mesh(new THREE.RingGeometry(r * 0.94, r, 64),
@@ -347,39 +389,159 @@ function makeOrb(color, r = 0.5) {
 const serviceNodes = {};
 SERVICES.forEach(s => { serviceNodes[s.name] = makeNode(s); });
 
-const edges = DEPENDS_ON.map(([a, b]) => makeEdge(serviceNodes[a].position, serviceNodes[b].position, 0x4a6fa5));
+const edges = DEPENDS_ON.map(([a, b]) => makeEdge(serviceNodes[a], serviceNodes[b], { color: 0x4a9fd8, radius: 0.045, opacity: 0.5 }));
 const dataPackets = [];
-edges.forEach(({ curve, line }, ei) => {
+edges.forEach((edge, ei) => {
   for (let i = 0; i < 2; i++) {
     const p = makeOrb(0x88ccff, 0.09);
-    p.userData = { curve, t: i / 2, speed: 0.15 + Math.random() * 0.12, ei };
+    p.userData = { edge, t: i / 2, speed: 0.15 + Math.random() * 0.12, ei };
     scene.add(p);
     dataPackets.push(p);
   }
 });
 
-/* Orbiting domain satellites: stories, incidents, releases, tests */
-const satellites = [];
-function addSatellite(parent, color, r, y, label, desc, type) {
+/* Knowledge-graph entity nodes: incidents, stories, releases wired to their services */
+const kbNodes = [];
+function kbPos(svcName, r, deg, y) {
+  const s = serviceNodes[svcName].position;
+  const a = deg * Math.PI / 180;
+  return new THREE.Vector3(s.x + Math.cos(a) * r, s.y + y, s.z + Math.sin(a) * r);
+}
+function makeKBNode(build, label, color, meta, pos, yLabel = -0.8) {
   const grp = new THREE.Group();
-  const orb = makeOrb(color, 0.32);
-  orb.position.set(r, y, 0);
-  grp.add(orb);
-  const tag = makeLabel(label, '#8fb7dd', 34); tag.scale.set(2.6, 0.7, 1);
-  tag.position.set(r, y + 0.85, 0);
-  grp.add(tag);
-  grp.userData = { desc, label, color, type };
-  parent.add(grp);
-  satellites.push({ grp, r, y });
+  const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.55, roughness: 0.3, metalness: 0.3 });
+  grp.add(build(mat));
+  const halo = new THREE.Mesh(new THREE.SphereGeometry(1.15, 20, 20),
+    new THREE.MeshBasicMaterial({ map: glowTexture('rgba(170,210,255,0.4)', 'rgba(0,0,0,0)'),
+                                  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+  grp.add(halo);
+  const lbl = makeLabel(label, '#dbe8fa', 30, 'dark'); lbl.scale.set(2.6, 0.68, 1);
+  lbl.position.y = yLabel;
+  grp.add(lbl);
+  grp.userData = meta;
+  grp.position.copy(pos);
+  scene.add(grp);
+  addHit(grp, 0.95);
   return grp;
 }
-addSatellite(serviceNodes['payment-svc'],      0x22d3ee, 2.1, 0.4,  'INC-1042', 'S1 resolved · Gateway timeout on charge', 'incident');
-addSatellite(serviceNodes['inventory-svc'],    0xf472b6, 2.1, 0.4,  'INC-1011', 'S2 resolved · Stock over-reservation', 'incident');
-addSatellite(serviceNodes['notification-svc'], 0xfb7185, 2.2, 0.5,  'INC-2099', 'S2 OPEN · Order emails not delivered', 'incident');
-addSatellite(serviceNodes['auth-svc'],         0x34d399, 2.1, 0.4,  'INC-3301', 'S3 resolved · Token rotation overlap', 'incident');
-addSatellite(serviceNodes['order-svc'],        0xa78bfa, 2.2, 0.5,  'AEG-221', 'Epic Payments · in_progress', 'story');
-addSatellite(serviceNodes['order-svc'],        0xa78bfa, 2.2, -0.6, 'AEG-207', 'Epic Commerce · done', 'story');
-addSatellite(serviceNodes['auth-svc'],         0x34d399, 2.2, -0.5, 'AEG-299', 'Epic Platform · done', 'story');
+function addIncident(inc) {
+  const open = inc.status === 'open';
+  const color = open ? 0xfb7185 : 0x22d3ee;
+  const node = makeKBNode(m => new THREE.Mesh(new THREE.OctahedronGeometry(0.38, 0), m),
+    inc.id, color, { type: 'incident', inc }, kbPos(inc.svc, 2.7, inc.angle, inc.y));
+  if (open) node.userData.pulse = true;
+  kbNodes.push(node);
+  makeEdge(node, serviceNodes[inc.svc], { color, radius: 0.02, opacity: 0.45, bend: 0.2 });
+  return node;
+}
+function addStory(st) {
+  const color = st.status === 'done' ? 0x34d399 : 0xa78bfa;
+  const node = makeKBNode(m => new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.55, 0.55), m),
+    st.key, color, { type: 'story', st }, kbPos(st.svc, 2.7, st.angle, st.y), -0.85);
+  kbNodes.push(node);
+  makeEdge(node, serviceNodes[st.svc], { color, radius: 0.02, opacity: 0.45, bend: 0.2 });
+  return node;
+}
+function addRelease(rl) {
+  const node = makeKBNode(m => new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.14, 12, 36), m),
+    rl.id, 0xfbbf24, { type: 'release', rl }, rl.pos, -0.9);
+  kbNodes.push(node);
+  rl.svc.forEach(s => makeEdge(node, serviceNodes[s], { color: 0xfbbf24, radius: 0.016, opacity: 0.4, bend: 0.25 }));
+  return node;
+}
+const incPos = { 'INC-1042': [200, 0.5], 'INC-1011': [60, 0.4], 'INC-2099': [160, 0.5], 'INC-3301': [320, 0.4] };
+INCIDENTS.forEach(inc => { const [a, y] = incPos[inc.id] || [90, 0.4]; inc.angle = a; inc.y = y; addIncident(inc); });
+const storyPos = { 'AEG-221': [300, -0.6], 'AEG-207': [25, -0.5], 'AEG-299': [220, -0.7], 'AEG-999': [120, -0.8] };
+STORIES.forEach(st => { const [a, y] = storyPos[st.key] || [90, -0.5]; st.angle = a; st.y = y; addStory(st); });
+RELEASES.forEach((rl, i) => {
+  rl.pos = [new THREE.Vector3(-3.0, 3.9, 1.6), new THREE.Vector3(3.6, 3.7, -0.6), new THREE.Vector3(0.2, 4.1, -2.6)][i];
+  addRelease(rl);
+});
+
+/* HOW chapter: data-flow diagram  PR → CIG → AGENTS → VERDICT */
+const flow = new THREE.Group();
+scene.add(flow);
+const FLOW_DEFS = [
+  { name: 'PR', sub: 'diff + linked story', color: 0x22d3ee, kind: 'pr' },
+  { name: 'CIG', sub: 'deterministic queries', color: 0x34d399, kind: 'db' },
+  { name: 'AGENTS', sub: 'CrewAI · judgment layer', color: 0xa78bfa, kind: 'agents' },
+  { name: 'VERDICT', sub: 'APPROVE · REVIEW · REJECT', color: 0xfbbf24, kind: 'verdict' },
+];
+const flowNodes = FLOW_DEFS.map((d, i) => {
+  const grp = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: d.color, emissive: d.color, emissiveIntensity: 0.6, roughness: 0.25, metalness: 0.3 });
+  let shape;
+  if (d.kind === 'pr') shape = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.9, 0.3), mat);
+  else if (d.kind === 'db') shape = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 1.15, 1.9, 24), mat);
+  else if (d.kind === 'agents') shape = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 0.35, 6), mat);
+  else shape = new THREE.Mesh(new THREE.OctahedronGeometry(1.15, 0), mat);
+  grp.add(shape);
+  const lbl = makeLabel(d.name, '#eaf1ff', 42, 'dark'); lbl.scale.set(3.4, 0.85, 1); lbl.position.y = -1.55;
+  grp.add(lbl);
+  if (d.kind !== 'agents') {
+    const sub = makeLabel(d.sub, '#9cc0e8', 25, 'none'); sub.scale.set(3.4, 0.7, 1); sub.position.y = -2.55;
+    grp.add(sub);
+  }
+  grp.userData = { type: 'flow', stage: d };
+  grp.position.set(-6.6 + i * 4.4, -2.2, -4.6);
+  flow.add(grp);
+  addHit(grp, 1.6);
+  return grp;
+});
+const flowEdges = [];
+for (let i = 0; i < flowNodes.length - 1; i++) {
+  flowEdges.push(makeEdge(flowNodes[i], flowNodes[i + 1], { color: 0x88ccff, radius: 0.035, opacity: 0.55, bend: 0.1, parent: flow }));
+}
+const flowPackets = [];
+flowEdges.forEach(edge => {
+  for (let i = 0; i < 3; i++) {
+    const p = makeOrb(0xaee3ff, 0.1);
+    flow.add(p);
+    p.userData = { edge, t: i / 3, speed: 0.22 + Math.random() * 0.1 };
+    flowPackets.push(p);
+  }
+});
+const AGENT_ROLES = ['Orchestrator', 'PR Reviewer', 'Blast Radius', 'Risk Analyzer', 'Test Selector'];
+const agentChips = AGENT_ROLES.map((role, i) => {
+  const chip = makeLabel(role, '#e6eeff', 26, 'dark'); chip.scale.set(2.9, 0.62, 1);
+  chip.position.set(-0.5 + i * 1.35, -4.15, -4.6);
+  flow.add(chip);
+  return chip;
+});
+flow.visible = false;
+
+/* LIVE chapter: graph → dashboard provenance screen */
+const live = new THREE.Group();
+scene.add(live);
+const screen = new THREE.Group();
+const sMat = new THREE.MeshStandardMaterial({ color: 0x22d3ee, emissive: 0x22d3ee, emissiveIntensity: 0.5, roughness: 0.4, metalness: 0.2, side: THREE.DoubleSide });
+const sPanel = new THREE.Mesh(new THREE.PlaneGeometry(7, 4.2), sMat);
+screen.add(sPanel);
+const sFrame = new THREE.Mesh(new THREE.BoxGeometry(7.4, 4.6, 0.16),
+  new THREE.MeshBasicMaterial({ color: 0x0d1424, transparent: true, opacity: 0.9 }));
+sFrame.position.z = -0.09;
+screen.add(sFrame);
+const sTitle = makeLabel('AEGIS · Streamlit :8501', '#eaf1ff', 44, 'dark'); sTitle.scale.set(4.6, 1.1, 1);
+sTitle.position.set(0, 2.55, 0.35);
+screen.add(sTitle);
+const q1 = makeLabel('blast_radius · story_alignment · risk_features · recommended_tests', '#9cc0e8', 28, 'none');
+q1.scale.set(4.6, 0.7, 1); q1.position.set(0, -1.75, 0.45);
+screen.add(q1);
+screen.position.set(6.2, 1.6, -3.2);
+screen.userData = { type: 'screen' };
+live.add(screen);
+addHit(screen, 3.6);
+const liveAnchor = new THREE.Group();
+liveAnchor.position.set(0, 0, 0);
+live.add(liveAnchor);
+const liveEdge = makeEdge(liveAnchor, screen, { color: 0xfb7185, radius: 0.025, opacity: 0.6, bend: 0.35, parent: live });
+const livePackets = [];
+for (let i = 0; i < 5; i++) {
+  const p = makeOrb(0xffc3d0, 0.11); live.add(p);
+  p.userData = { edge: liveEdge, t: i / 5, speed: 0.3 + Math.random() * 0.15 };
+  livePackets.push(p);
+}
+live.visible = false;
 
 /* Suite visualization: full vs targeted (ring segments) */
 const suiteFull = makeRing(0x335588, 5.4); suiteFull.visible = false;
@@ -398,22 +560,33 @@ const prNodes = PRS.map(pr => {
                                   transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
   glow.rotation.x = Math.PI / 2; glow.position.y = -0.05;
   grp.add(glow);
-  const verdictLabel = makeLabel(`#${pr.number}  ${pr.verdict}`, '#06121f', 40);
+  const verdictLabel = makeLabel(`#${pr.number}  ${pr.verdict}`, '#06121f', 40, 'light');
   verdictLabel.scale.set(3.4, 0.85, 1); verdictLabel.position.y = 0.02;
   grp.add(verdictLabel);
-  const titleLabel = makeLabel(pr.title, '#cfe0ff', 34); titleLabel.scale.set(3.0, 0.75, 1);
+  const titleLabel = makeLabel(pr.title, '#e6eeff', 34, 'dark'); titleLabel.scale.set(3.0, 0.75, 1);
   titleLabel.position.y = -1.9;
   grp.add(titleLabel);
-  const subLabel = makeLabel(`conf ${pr.conf}% · regr ${pr.regr} · ${pr.align}`, '#8fb7dd', 30);
+  const subLabel = makeLabel(`conf ${pr.conf}% · regr ${pr.regr} · ${pr.align}`, '#9cc0e8', 30, 'dark');
   subLabel.scale.set(2.8, 0.7, 1); subLabel.position.y = -2.7;
   grp.add(subLabel);
   grp.userData = { type: 'pr', pr };
   scene.add(grp);
+  addHit(grp, 2.2);
   return grp;
 });
 /* place verdict nodes in a wide arc */
 const prPositions = [new THREE.Vector3(-5.5, 0, -2), new THREE.Vector3(0, 0, 0), new THREE.Vector3(5.5, 0, -2)];
 prNodes.forEach((n, i) => n.position.copy(prPositions[i]));
+/* link each verdict node to its story in the graph (WHAT chapter) */
+const prEdgeGroup = new THREE.Group();
+scene.add(prEdgeGroup);
+PRS.forEach((pr, i) => {
+  const story = kbNodes.find(n => n.userData.type === 'story' && n.userData.st.key === pr.story);
+  if (story) {
+    const c = pr.align === 'GAPS' ? 0xfb7185 : pr.color;
+    makeEdge(prNodes[i], story, { color: c, radius: 0.02, opacity: 0.5, bend: 0.35, parent: prEdgeGroup });
+  }
+});
 
 /* Chapter camera targets */
 const chapterCam = CHAPTERS.map(ch => {
@@ -442,7 +615,10 @@ function renderChapter(i) {
   suiteFull.visible = i === 0;
   suiteTarget.visible = i === 0;
   prNodes.forEach((n, k) => { n.visible = i === 2; });
+  prEdgeGroup.visible = i === 2;
   dataPackets.forEach(p => { p.visible = i !== 2; });
+  flow.visible = i === 1;
+  live.visible = i === 3;
 }
 function hideTip() { tipEl.classList.remove('show'); }
 function showTip(html) { tipEl.innerHTML = html; tipEl.classList.add('show'); }
@@ -466,32 +642,104 @@ function animateToChapter(i) {
   })(start);
 }
 
-/* ================= RAYCAST INTERACTIONS ================= */
+/* ================= INTERACTIONS ================= */
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2(-2, -2);
-const clickables = [...Object.values(serviceNodes), ...satellites.map(s => s.grp), ...prNodes];
 let hovered = null;
+const drag = { active: false, group: null, plane: new THREE.Plane(), offset: new THREE.Vector3(),
+               moved: 0, lastX: 0, lastY: 0, lastDrag: 0 };
 
+function visibleUp(o) {
+  while (o) { if (o.visible === false) return false; o = o.parent; }
+  return true;
+}
 function pick(clientX, clientY) {
   mouse.x = (clientX / innerWidth) * 2 - 1;
   mouse.y = -(clientY / innerHeight) * 2 + 1;
   raycaster.setFromCamera(mouse, camera);
-  for (const obj of clickables) {
-    const hits = raycaster.intersectObject(obj, true);
-    if (hits.some(h => h.object.userData.type !== 'label')) return obj;
+  const targets = interactables.filter(i => visibleUp(i.hit)).map(i => i.hit);
+  const hits = raycaster.intersectObjects(targets, false);
+  if (!hits.length) return null;
+  let best = null, bestD = Infinity;
+  for (const h of hits) {
+    const g = interactables.find(i => i.hit === h.object).group;
+    const sp = g.position.clone().project(camera);
+    const d = Math.hypot((sp.x * 0.5 + 0.5) * innerWidth - clientX, (-sp.y * 0.5 + 0.5) * innerHeight - clientY);
+    if (d < bestD) { bestD = d; best = g; }
   }
-  return null;
+  return best;
 }
+
+function highlight(group, on) {
+  if (!group) return;
+  group.scale.setScalar(on ? 1.12 : 1);
+  group.traverse(o => {
+    if (o.isMesh && o.material && o.material.emissive) {
+      const base = o.userData.ei ?? o.material.emissiveIntensity;
+      o.userData.ei = base;
+      o.material.emissiveIntensity = on ? base * 1.7 : base;
+    }
+  });
+}
+
+addEventListener('pointerdown', e => {
+  const g = pick(e.clientX, e.clientY);
+  if (!g) return;
+  drag.active = true; drag.group = g; drag.moved = 0;
+  drag.lastX = e.clientX; drag.lastY = e.clientY;
+  controls.enabled = false;
+  mouse.x = (e.clientX / innerWidth) * 2 - 1;
+  mouse.y = -(e.clientY / innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  drag.plane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()).negate(), g.position);
+  const hp = raycaster.ray.intersectPlane(drag.plane, new THREE.Vector3());
+  drag.offset.copy(hp ? hp.sub(g.position) : new THREE.Vector3());
+  renderer.domElement.style.cursor = 'grabbing';
+});
+
+addEventListener('pointermove', e => {
+  if (drag.active && drag.group) {
+    drag.moved += Math.hypot(e.clientX - drag.lastX, e.clientY - drag.lastY);
+    drag.lastX = e.clientX; drag.lastY = e.clientY;
+    mouse.x = (e.clientX / innerWidth) * 2 - 1;
+    mouse.y = -(e.clientY / innerHeight) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    const p = raycaster.ray.intersectPlane(drag.plane, new THREE.Vector3());
+    if (p) {
+      drag.group.position.copy(p.sub(drag.offset));
+      (drag.group.edges || []).forEach(ed => ed.refresh());
+    }
+    return;
+  }
+  const g = pick(e.clientX, e.clientY);
+  if (g !== hovered) {
+    highlight(hovered, false);
+    hovered = g;
+    highlight(g, true);
+    renderer.domElement.style.cursor = g ? 'pointer' : 'grab';
+  }
+});
+
+addEventListener('pointerup', () => {
+  if (!drag.active) return;
+  if (drag.moved > 6) drag.lastDrag = performance.now();
+  drag.active = false; drag.group = null;
+  controls.enabled = true;
+  renderer.domElement.style.cursor = 'grab';
+});
+
 addEventListener('click', e => {
+  if (performance.now() - drag.lastDrag < 250) return;
   const hit = pick(e.clientX, e.clientY);
   if (!hit) { hideTip(); return; }
   const u = hit.userData;
   if (u.type === 'service') {
     const s = u.service;
+    const conns = (hit.edges || []).length;
     showTip(`<div class="t-head" style="color:#${s.color.toString(16).padStart(6,'0')}">${s.name}</div>
-      <div class="t-sub">microservice</div>
+      <div class="t-sub">microservice · ${conns} graph connections</div>
       <div class="t-body">domain <b>${s.domain}</b> · owner <b>${s.owner}</b><br>
-      runs ${(Math.random() * 8 + 2).toFixed(0)} API routes · sits on the dependency chain below.</div>
+      incidents and stories link here. Drag it to move its whole cluster.</div>
       <span class="t-badge" style="background:rgba(34,211,238,.15);color:#7ff0c6">${s.domain}</span>`);
   } else if (u.type === 'pr') {
     const p = u.pr;
@@ -503,11 +751,41 @@ addEventListener('click', e => {
       requirements: <b>${p.align}</b> · recommended <b>${p.tests} of ${SUITE_TOTAL}</b> tests</div>
       <span class="t-badge" style="background:${styleMap[p.verdict]}">${p.verdict}</span>`);
   } else if (u.type === 'incident') {
-    showTip(`<div class="t-head">${u.label}</div><div class="t-sub">incident</div>
-      <div class="t-body">${u.desc}</div>`);
+    const i = u.inc;
+    const st = i.status === 'open' ? 'rgba(251,113,133,.15);color:#ffb3c1' : 'rgba(34,211,238,.15);color:#7ff0c6';
+    showTip(`<div class="t-head" style="color:#fb7185">${i.id}</div>
+      <div class="t-sub">incident · ${i.sev} · ${i.status} · affects ${i.svc}</div>
+      <div class="t-body">${i.cause}<br><br>Open incidents are excluded from regression history — they surface in deployment readiness instead.</div>
+      <span class="t-badge" style="background:${st}">${i.status.toUpperCase()}</span>`);
   } else if (u.type === 'story') {
-    showTip(`<div class="t-head">${u.label}</div><div class="t-sub">Jira story</div>
-      <div class="t-body">${u.desc}</div>`);
+    const st = u.st;
+    showTip(`<div class="t-head">${st.key}</div>
+      <div class="t-sub">Jira story · epic ${st.epic} · ${st.status} · touches ${st.svc}</div>
+      <div class="t-body">${st.title}<br><br>story_alignment flags GAPS when a PR touches code outside its story's epic.</div>
+      <span class="t-badge" style="background:rgba(167,139,250,.15);color:#c4b5fd">${st.epic.toUpperCase()}</span>`);
+  } else if (u.type === 'release') {
+    const rl = u.rl;
+    showTip(`<div class="t-head">${rl.id}</div>
+      <div class="t-sub">release · ${rl.date}</div>
+      <div class="t-body">shipped to: ${rl.svc.join(', ')}<br><br>release_history feeds deployment readiness and regression context.</div>
+      <span class="t-badge" style="background:rgba(251,191,36,.15);color:#ffd98a">RELEASED_IN</span>`);
+  } else if (u.type === 'flow') {
+    const stg = u.stage;
+    const detail = {
+      PR: 'Input — the pull request: diff + linked Jira story. AEGIS starts here.',
+      CIG: 'Connected Intelligence Graph (Neo4j). Deterministic queries: blast_radius, recommended_tests, risk_features, story_alignment, suite_size.',
+      AGENTS: 'CrewAI crew reasons over the graph: Orchestrator, PR Reviewer, Blast Radius, Risk Analyzer, Test Selector. Fast mode skips the crew and runs on graph math alone.',
+      VERDICT: 'One decision per PR — APPROVE / REVIEW / REJECT, derived from merge confidence, regression probability and story alignment.',
+    }[stg.name];
+    showTip(`<div class="t-head" style="color:#${stg.color.toString(16).padStart(6,'0')}">${stg.name}</div>
+      <div class="t-sub">data-flow stage · ${stg.sub}</div>
+      <div class="t-body">${detail}</div>`);
+  } else if (u.type === 'screen') {
+    showTip(`<div class="t-head">AEGIS dashboard</div>
+      <div class="t-sub">Streamlit · localhost:8501</div>
+      <div class="t-body">Same graph, rendered live. The provenance panel prints every Cypher query the analysis ran — nothing is a black box.<br><br>
+      <code style="color:#7ff0c6">MATCH (p:PR)-[:TOUCHES]->(f:File)-[:COVERED_BY]->(t:Test)</code></div>
+      <span class="t-badge" style="background:rgba(34,211,238,.15);color:#7ff0c6">PROVENANCE</span>`);
   }
 });
 
@@ -519,22 +797,35 @@ function animate() {
   const dt = clock.getDelta();
   const t = clock.elapsedTime;
 
-  // gentle bob for service nodes + spin satellites
+  // gentle bob for services; open incidents pulse
   for (const n of Object.values(serviceNodes)) {
-    n.position.y = Math.sin(t * 0.6 + n.position.x * 0.7) * 0.08;
+    n.position.y = Math.sin(t * 0.4 + n.position.x * 0.7) * 0.04;
   }
-  satellites.forEach(({ grp }, i) => {
-    grp.rotation.y = t * 0.5 + i * 2.1;
+  kbNodes.forEach(n => {
+    if (n.userData.pulse) {
+      const k = 0.5 + 0.5 * Math.sin(t * 3.2);
+      const halo = n.children[1];
+      halo.scale.setScalar(1 + k * 0.3);
+      halo.material.opacity = 0.3 + k * 0.35;
+    }
   });
 
-  // data packets travelling along edges
+  // packets travelling along graph edges
   dataPackets.forEach(p => {
     const d = p.userData;
     d.t += dt * d.speed;
     if (d.t > 1) d.t -= 1;
-    p.position.copy(d.curve.getPoint(d.t));
+    p.position.copy(d.edge.curve.getPoint(d.t));
     const s = 0.7 + Math.sin(t * 6 + d.t * 20) * 0.3;
     p.scale.set(s, s, s);
+  });
+
+  // packets flowing through the HOW pipeline + LIVE graph→dashboard
+  [...flowPackets, ...livePackets].forEach(p => {
+    const d = p.userData;
+    d.t += dt * d.speed;
+    if (d.t > 1) d.t -= 1;
+    p.position.copy(d.edge.curve.getPoint(d.t));
   });
 
   // chapter 0 suite-cut animation: full ring contracts to target ring

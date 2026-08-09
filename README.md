@@ -182,7 +182,18 @@ Suite targeting: **5 of 24 tests** recommended for PR #482 (−79%), covering di
 
 ### 3D architecture tour
 
-Open `demo/aegis-3d-demo.html` in a browser — an interactive Three.js scene walking through **WHY → HOW → WHAT → LIVE** with the real service topology, orbiting incidents/stories, animated data flow and clickable verdict nodes. (Loads Three.js from a CDN; needs internet.)
+Open `demo/aegis-3d-demo.html` in a browser — an interactive Three.js scene walking through **WHY → HOW → WHAT → LIVE**. (Loads Three.js from a CDN; needs internet.)
+
+Each chapter ships its own visualization:
+
+| Chapter | Visualization |
+|---|---|
+| WHY | suite-cut rings (24 → 5 tests) + the full knowledge graph |
+| HOW | data-flow diagram `PR → CIG → AGENTS → VERDICT` with animated packets |
+| WHAT | PR verdict discs wired to their Jira stories (green ALIGNED / rose GAPS) |
+| LIVE | graph → Streamlit provenance screen with the executed Cypher |
+
+The scene is a real graph, not decoration: services, incidents, stories and releases are distinct nodes (sphere / diamond / cube / ring) connected by glowing edges, with a legend in the corner. Interact any way you like — **drag empty space to orbit 360°**, **drag a node to rearrange the graph** (edges follow), scroll to zoom, and **click any node to inspect its knowledge-base record**. Open incidents pulse. (Loads Three.js from a CDN; needs internet.)
 
 ---
 
