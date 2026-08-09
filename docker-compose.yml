@@ -1,0 +1,68 @@
+services:
+  neo4j:
+    image: neo4j:5-community
+    container_name: aegis-neo4j
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD}
+      NEO4J_server_memory_pagecache_size: 512M
+      NEO4J_server_memory_heap_max__size: 512M
+    ports:
+      - "7474:7474"   # Neo4j Browser (HTTP)
+      - "7687:7687"   # Bolt protocol
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: aegis-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    command: >-
+      /bin/sh -c "ollama serve & sleep 5 &&
+      ollama pull ${OLLAMA_MODEL:-gemma2:2b} || true &&
+      wait"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  aegis-app:
+    build:
+      context: .
+      dockerfile: docker/python.Dockerfile
+    container_name: aegis-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NEO4J_URI: bolt://neo4j:7687
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./src:/app/src
+      - ./scripts:/app/scripts
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    command: ["streamlit", "run", "src/aegis/ui/app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+
+volumes:
+  neo4j_data:
+  ollama_data:
