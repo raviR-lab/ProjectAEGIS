@@ -1,6 +1,6 @@
 neo4j==6.2.0
 streamlit==1.61.1
-crewai==1.9.2
+crewai==1.10.1
 litellm==1.96.0
 python-dotenv==1.1.1
 requests==2.34.2
