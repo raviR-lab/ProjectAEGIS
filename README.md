@@ -69,7 +69,6 @@ aegis/
 │   │   └── ollama.py           # Ollama HTTP client
 │   ├── tasks/workflows.py      # CrewAI task definitions (PR + deployment)
 │   └── ui/app.py               # Streamlit dashboard
-├── demo/aegis-3d-demo.html     # interactive Three.js architecture tour
 └── tests/                      # unit tests (canned-client, no DB needed)
 ```
 
@@ -179,21 +178,6 @@ python scripts/analyze_pr.py --deploy v1.11.0 --services payment-svc order-svc
 | #501 | `charge.py` + `refund.py` under a Platform story | **REJECT** | payment files under `AEG-999` (epic mismatch → GAPS) |
 
 Suite targeting: **5 of 24 tests** recommended for PR #482 (−79%), covering direct files, affected services and regression history. Open incidents (e.g. INC-2099) are excluded from regression history — they're current problems handled by deployment readiness, not past signal.
-
-### 3D architecture tour
-
-Open `demo/aegis-3d-demo.html` in a browser — an interactive Three.js scene walking through **WHY → HOW → WHAT → LIVE**. (Loads Three.js from a CDN; needs internet.)
-
-Each chapter ships its own visualization:
-
-| Chapter | Visualization |
-|---|---|
-| WHY | suite-cut rings (24 → 5 tests) + the full knowledge graph |
-| HOW | data-flow diagram `PR → CIG → AGENTS → VERDICT` with animated packets |
-| WHAT | PR verdict discs wired to their Jira stories (green ALIGNED / rose GAPS) |
-| LIVE | graph → Streamlit provenance screen with the executed Cypher |
-
-The scene is a real graph, not decoration: services, incidents, stories and releases are distinct nodes (sphere / diamond / cube / ring) connected by glowing edges, with a legend in the corner. Interact any way you like — **drag empty space to orbit 360°**, **drag a node to rearrange the graph** (edges follow), scroll to zoom, and **click any node to inspect its knowledge-base record**. Open incidents pulse. (Loads Three.js from a CDN; needs internet.)
 
 ---
 
