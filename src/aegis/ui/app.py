@@ -1,4 +1,6 @@
+import importlib
 import sys
+from html import escape as html_escape
 from pathlib import Path
 
 try:
@@ -6,12 +8,35 @@ try:
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+import aegis.config as _aegis_config
+
+importlib.reload(_aegis_config)
+for _mod_name in (
+    "aegis.integrations.mcp_runtime",
+    "aegis.integrations.github_client",
+    "aegis.integrations.github_comments",
+    "aegis.integrations.jira_client",
+):
+    if _mod_name in sys.modules:
+        importlib.reload(sys.modules[_mod_name])
+
 import streamlit as st
 
+from aegis import config
 from aegis.agents.registry import AGENT_SPECS
 from aegis.core.orchestrator import AegisOrchestrator, AegisReport
 from aegis.graph import queries
 from aegis.graph.neo4j import CIGClient
+from aegis.integrations.github_client import (
+    connection_status as github_connection_status,
+    github_configured,
+)
+from aegis.integrations.github_comments import maybe_post_report, resolve_github_pr_number
+from aegis.integrations.jira_client import (
+    connection_status as jira_connection_status,
+    jira_configured,
+)
+from aegis.integrations.mcp_runtime import github_mcp_details, jira_mcp_details
 from aegis.llm.ollama import OllamaClient
 
 st.set_page_config(page_title="Project AEGIS", layout="wide")
@@ -150,6 +175,43 @@ st.markdown(
       button[kind="primary"]:hover { filter: brightness(1.1); }
       .stProgress > div > div > div { background: var(--grad); }
       hr { border-color: var(--border); }
+
+      .conn-card { background: var(--panel); border:1px solid var(--border); border-radius:18px;
+                   padding: 18px 20px 16px; backdrop-filter: blur(14px); margin-bottom: 12px;
+                   box-shadow: 0 10px 40px rgba(0,0,0,.35); position:relative; overflow:hidden; }
+      .conn-card::before { content:""; position:absolute; inset:0 auto 0 0; width:3px; }
+      .conn-card.ok::before { background: var(--green); }
+      .conn-card.warn::before { background: var(--amber); }
+      .conn-card.bad::before { background: var(--rose); }
+      .conn-card.ok { border-color: rgba(52,211,153,.28);
+                      box-shadow: 0 0 0 1px rgba(52,211,153,.08), 0 10px 40px rgba(0,0,0,.35); }
+      .conn-head { display:flex; align-items:center; gap:12px; margin-bottom: 12px; }
+      .conn-glyph { width:42px; height:42px; border-radius:12px; display:flex; align-items:center;
+                    justify-content:center; font-weight:800; font-size:13px; letter-spacing:.4px;
+                    color:#06121f; flex-shrink:0; }
+      .conn-glyph.gh { background: linear-gradient(135deg,#e8eefc,#a78bfa); }
+      .conn-glyph.jira { background: linear-gradient(135deg,#22d3ee,#60a5fa); }
+      .conn-name { font-weight:700; font-size:16px; }
+      .conn-via { color: var(--muted); font-size:12px; margin-top:1px; }
+      .conn-pill { margin-left:auto; border-radius:999px; padding:4px 12px; font-size:11px;
+                   font-weight:700; letter-spacing:.8px; text-transform:uppercase; }
+      .conn-pill.ok { background: rgba(52,211,153,.16); color:#7ff0c6; border:1px solid rgba(52,211,153,.35); }
+      .conn-pill.warn { background: rgba(251,191,36,.14); color:#ffd98a; border:1px solid rgba(251,191,36,.35); }
+      .conn-pill.bad { background: rgba(251,113,133,.14); color:#ffb3c1; border:1px solid rgba(251,113,133,.35); }
+      .conn-headline { font-size:20px; font-weight:700; letter-spacing:-.3px; margin: 2px 0 10px;
+                       background: var(--grad); -webkit-background-clip:text; background-clip:text;
+                       -webkit-text-fill-color:transparent; }
+      .conn-facts { display:grid; grid-template-columns: 1fr 1fr; gap:8px 14px; margin-bottom: 12px; }
+      .conn-fact .k { color: var(--muted); font-size:10px; letter-spacing:1.2px; text-transform:uppercase; }
+      .conn-fact .v { font-size:13px; margin-top:2px; color:#d5def0; }
+      .term { font-family:'JetBrains Mono', monospace; font-size:11.5px; color:#9ec9ea;
+              background: rgba(7,14,28,.55); border:1px dashed rgba(120,190,255,.22);
+              border-radius:10px; padding:8px 12px; overflow:auto; white-space:nowrap; }
+      .conn-err { margin-top:10px; color:#ffb3c1; font-size:12.5px; }
+
+      .stTextInput input, .stSelectbox [data-baseweb="select"] > div {
+        background: rgba(7,14,28,.55) !important; border-radius:10px !important;
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -192,8 +254,86 @@ GLOSSARY = {
 
 
 def chips(items, variant="") -> str:
-    parts = [f'<span class="chip {variant}">{str(i)}</span>' for i in items]
+    parts = [f'<span class="chip {variant}">{html_escape(str(i))}</span>' for i in items]
     return "".join(parts) if parts else '<span style="color:var(--muted)">none</span>'
+
+
+def status_rows_html(title, rows) -> str:
+    """Render a stack-status card. Rows are (label, variant) or (label, value, variant)."""
+    parts = []
+    for row in rows:
+        if len(row) >= 3:
+            label, value, variant = row[0], row[1], row[2]
+        else:
+            label, second = row[0], row[1]
+            if second in {"ok", "warn", "bad"}:
+                value, variant = second.upper(), second
+            else:
+                value, variant = second, ""
+        if variant in {"ok", "warn", "bad"}:
+            chip = (
+                f'<span class="chip {variant}" style="margin:0">'
+                f"{html_escape(str(value))}</span>"
+            )
+        else:
+            chip = (
+                f'<span style="color:var(--muted);font-size:12.5px;text-align:right;'
+                f'max-width:62%">{html_escape(str(value))}</span>'
+            )
+        parts.append(
+            f'<div style="display:flex;justify-content:space-between;align-items:center;'
+            f'padding:5px 0;border-bottom:1px solid var(--border);font-size:13px;gap:12px">'
+            f"<span>{html_escape(str(label))}</span>{chip}</div>"
+        )
+    return (
+        f'<div class="glass glass-glow" style="margin-bottom:12px">'
+        f'<div style="font-weight:600;margin-bottom:4px">{html_escape(title)}</div>'
+        f"{''.join(parts)}</div>"
+    )
+
+
+def mcp_probe_state(status: dict | None, configured: bool) -> tuple[str, str]:
+    """(variant, label) for a connection tile."""
+    if status and status.get("ok"):
+        return "ok", "Connected"
+    if status and status.get("configured") and not status.get("ok"):
+        return "bad", "Failed"
+    if configured:
+        return "warn", "Ready"
+    return "warn", "Not set"
+
+
+def conn_card_html(
+    *,
+    kind: str,
+    glyph: str,
+    glyph_class: str,
+    headline: str,
+    facts: list[tuple[str, str]],
+    spawn: str,
+    variant: str,
+    pill: str,
+    error: str | None = None,
+) -> str:
+    fact_html = "".join(
+        f'<div class="conn-fact"><div class="k">{html_escape(k)}</div>'
+        f'<div class="v">{html_escape(v)}</div></div>'
+        for k, v in facts
+    )
+    err = (
+        f'<div class="conn-err">{html_escape(error)}</div>' if error else ""
+    )
+    return (
+        f'<div class="conn-card {variant}">'
+        f'<div class="conn-head">'
+        f'<div class="conn-glyph {glyph_class}">{html_escape(glyph)}</div>'
+        f'<div><div class="conn-name">{html_escape(kind)}</div>'
+        f'<div class="conn-via">MCP stdio · no in-app REST</div></div>'
+        f'<span class="conn-pill {variant}">{html_escape(pill)}</span></div>'
+        f'<div class="conn-headline">{html_escape(headline or "Not configured")}</div>'
+        f'<div class="conn-facts">{fact_html}</div>'
+        f'<div class="term">{html_escape(spawn or "—")}</div>{err}</div>'
+    )
 
 
 def stat_html(label: str, value: str, delta: str = "", accent: bool = False) -> str:
@@ -285,6 +425,7 @@ def provenance_html(report: AegisReport) -> str:
     q_block = "".join(
         f'<div class="q">→ {q}</div>' for q in prov.get("queries", [])
     )
+    empty_q = "<div class='q'>—</div>"
 
     return (
         f'<div class="provenance">'
@@ -292,7 +433,7 @@ def provenance_html(report: AegisReport) -> str:
         f'<div class="qline">Neo4j graph read: {node_summary}</div>'
         f'<div class="qline">Relationships traversed: {rel_summary}</div>'
         f'<div class="qline" style="margin-top:8px">Cypher executed for this analysis:</div>'
-        f'{q_block or "<div class=\'q\'>—</div>"}'
+        f'{q_block or empty_q}'
         f'</div>'
     )
 
@@ -348,19 +489,6 @@ with tab_health:
                 ]
         except Exception as exc:
             ollama_rows = [(f"Ollama: {exc}", "bad")]
-
-        def status_rows_html(title, rows):
-            items = "".join(
-                f'<div style="display:flex;justify-content:space-between;align-items:center;'
-                f'padding:5px 0;border-bottom:1px solid var(--border);font-size:13px">'
-                f'<span>{label}</span>'
-                f'<span class="chip {variant}" style="margin:0">{variant.upper()}</span></div>'
-                for label, variant in rows
-            )
-            return (
-                f'<div class="glass glass-glow" style="margin-bottom:12px">'
-                f'<div style="font-weight:600;margin-bottom:4px">{title}</div>{items}</div>'
-            )
 
         st.markdown(
             status_rows_html("Neo4j — Connected Intelligence Graph", neo4j_rows)
@@ -422,6 +550,231 @@ with tab_health:
                 )
             st.markdown("</div>", unsafe_allow_html=True)
 
+    gh_details = github_mcp_details()
+    jira_details = jira_mcp_details()
+    gh_status = st.session_state.get("github_mcp_status")
+    jira_status = st.session_state.get("jira_mcp_status")
+    gh_var, gh_pill = mcp_probe_state(gh_status, github_configured())
+    jira_var, jira_pill = mcp_probe_state(jira_status, jira_configured())
+    if gh_status and gh_status.get("ok") and gh_status.get("full_name"):
+        gh_headline = gh_status["full_name"]
+    else:
+        gh_headline = gh_details.get("full_name") or "Connect a GitHub repo"
+    if jira_status and jira_status.get("ok") and jira_status.get("site"):
+        jira_headline = jira_status.get("project_name") or jira_status.get("site")
+    else:
+        jira_headline = (
+            jira_details.get("base_url")
+            or jira_details.get("site")
+            or "Connect a Jira site"
+        )
+    gh_error = None
+    if gh_status and not gh_status.get("ok") and not gh_status.get("skipped"):
+        gh_error = str(gh_status.get("error") or "Probe failed")[:180]
+    jira_error = None
+    if jira_status and not jira_status.get("ok") and not jira_status.get("skipped"):
+        jira_error = str(jira_status.get("error") or "Probe failed")[:180]
+
+    st.markdown('<div class="kicker">Integrations · MCP</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-title">GitHub &amp; Jira connections</div>'
+        '<div style="color:var(--muted);font-size:13.5px;margin:-4px 0 14px">'
+        "AEGIS talks to GitHub and Jira only through MCP. Credentials stay in "
+        "<code>.env</code> and are injected into the server process — never into REST clients. "
+        "Graph analysis still works if a connection is off.</div>",
+        unsafe_allow_html=True,
+    )
+    mcp_l, mcp_r = st.columns(2, gap="large")
+    with mcp_l:
+        st.markdown(
+            conn_card_html(
+                kind="GitHub",
+                glyph="GH",
+                glyph_class="gh",
+                headline=gh_headline,
+                facts=[
+                    ("Token", gh_details.get("token") or "not set"),
+                    ("Source", gh_details.get("source") or "auto"),
+                    ("PR map", gh_details.get("pr_map") or "none"),
+                    ("Package", gh_details.get("package") or "—"),
+                ],
+                spawn=gh_details.get("spawn") or "",
+                variant=gh_var,
+                pill=gh_pill,
+                error=gh_error,
+            ),
+            unsafe_allow_html=True,
+        )
+        if st.button(
+            "Test GitHub connection",
+            disabled=not github_configured(),
+            width="stretch",
+            help="Spawns the GitHub MCP server with your token and probes the repo.",
+        ):
+            with st.spinner("Talking to GitHub MCP…"):
+                st.session_state.github_mcp_status = github_connection_status()
+            st.rerun()
+        with st.expander("Edit GitHub connection", expanded=not github_configured()):
+            with st.form("github_mcp_config"):
+                g1, g2 = st.columns(2)
+                with g1:
+                    gh_owner = st.text_input(
+                        "Owner", value=config.get("GITHUB_REPO_OWNER") or ""
+                    )
+                with g2:
+                    gh_repo = st.text_input(
+                        "Repository", value=config.get("GITHUB_REPO_NAME") or ""
+                    )
+                gh_map = st.text_input(
+                    "CIG → GitHub PR map",
+                    value=config.get("GITHUB_PR_MAP") or "",
+                    placeholder="482:1, 500:2",
+                )
+                gh_source = st.selectbox(
+                    "When to use MCP",
+                    ["auto", "mcp", "fixture"],
+                    index=["auto", "mcp", "fixture"].index(
+                        (config.get("GITHUB_SOURCE", "auto") or "auto").lower()
+                        if (config.get("GITHUB_SOURCE", "auto") or "auto").lower()
+                        in {"auto", "mcp", "fixture"}
+                        else "auto"
+                    ),
+                )
+                gh_token = st.text_input(
+                    "Personal access token",
+                    type="password",
+                    value="",
+                    placeholder="••••  leave blank to keep current",
+                )
+                st.caption("Advanced MCP server")
+                gh_cmd = st.text_input(
+                    "Command",
+                    value=config.get("MCP_GITHUB_COMMAND", "npx") or "npx",
+                )
+                gh_pkg = st.text_input(
+                    "Package",
+                    value=config.get("MCP_GITHUB_PACKAGE", "@modelcontextprotocol/server-github")
+                    or "@modelcontextprotocol/server-github",
+                )
+                gh_args = st.text_input(
+                    "Args override",
+                    value=config.get("MCP_GITHUB_ARGS") or "",
+                    placeholder="-y <package>",
+                )
+                if st.form_submit_button("Save GitHub", type="primary"):
+                    saved = config.apply_updates(
+                        {
+                            "GITHUB_REPO_OWNER": gh_owner,
+                            "GITHUB_REPO_NAME": gh_repo,
+                            "GITHUB_SOURCE": gh_source,
+                            "GITHUB_PR_MAP": gh_map,
+                            "MCP_GITHUB_COMMAND": gh_cmd,
+                            "MCP_GITHUB_PACKAGE": gh_pkg,
+                            "MCP_GITHUB_ARGS": gh_args,
+                            "GITHUB_TOKEN": gh_token,
+                        }
+                    )
+                    st.session_state.github_mcp_status = None
+                    st.success("Saved · " + ", ".join(saved) if saved else "Nothing to save")
+                    st.rerun()
+    with mcp_r:
+        st.markdown(
+            conn_card_html(
+                kind="Jira",
+                glyph="JI",
+                glyph_class="jira",
+                headline=jira_headline,
+                facts=[
+                    ("Token", jira_details.get("token") or "not set"),
+                    ("Source", jira_details.get("source") or "local"),
+                    ("Project", jira_details.get("project_key") or "—"),
+                    ("Email", jira_details.get("email") or "not set"),
+                ],
+                spawn=jira_details.get("spawn") or "",
+                variant=jira_var,
+                pill=jira_pill,
+                error=jira_error,
+            ),
+            unsafe_allow_html=True,
+        )
+        if st.button(
+            "Test Jira connection",
+            disabled=not jira_configured(),
+            width="stretch",
+            help="Spawns the Jira MCP server and checks the site + project.",
+        ):
+            with st.spinner("Talking to Jira MCP…"):
+                st.session_state.jira_mcp_status = jira_connection_status()
+            st.rerun()
+        jira_source_val = (config.get("JIRA_SOURCE", "local") or "local").lower()
+        jira_source_opts = ["mcp", "cloud", "local"]
+        with st.expander("Edit Jira connection", expanded=not jira_configured()):
+            with st.form("jira_mcp_config"):
+                jira_url = st.text_input(
+                    "Site URL",
+                    value=config.get("JIRA_BASE_URL") or "",
+                    placeholder="https://your-site.atlassian.net",
+                )
+                j1, j2 = st.columns(2)
+                with j1:
+                    jira_email = st.text_input(
+                        "Email", value=config.get("JIRA_EMAIL") or ""
+                    )
+                with j2:
+                    jira_key = st.text_input(
+                        "Project key",
+                        value=config.get("JIRA_PROJECT_KEY", "AEG") or "AEG",
+                    )
+                jira_name = st.text_input(
+                    "Project name",
+                    value=config.get("JIRA_PROJECT_NAME", "Project AEGIS") or "Project AEGIS",
+                )
+                jira_source = st.selectbox(
+                    "When to use MCP",
+                    jira_source_opts,
+                    index=jira_source_opts.index(jira_source_val)
+                    if jira_source_val in jira_source_opts
+                    else 2,
+                )
+                jira_token = st.text_input(
+                    "API token",
+                    type="password",
+                    value="",
+                    placeholder="••••  leave blank to keep current",
+                )
+                st.caption("Advanced MCP server")
+                jira_cmd = st.text_input(
+                    "Command",
+                    value=config.get("MCP_JIRA_COMMAND", "npx") or "npx",
+                )
+                jira_pkg = st.text_input(
+                    "Package",
+                    value=config.get("MCP_JIRA_PACKAGE", "@aashari/mcp-server-atlassian-jira")
+                    or "@aashari/mcp-server-atlassian-jira",
+                )
+                jira_args = st.text_input(
+                    "Args override",
+                    value=config.get("MCP_JIRA_ARGS") or "",
+                    placeholder="-y <package>",
+                )
+                if st.form_submit_button("Save Jira", type="primary"):
+                    saved = config.apply_updates(
+                        {
+                            "JIRA_BASE_URL": jira_url,
+                            "JIRA_EMAIL": jira_email,
+                            "JIRA_PROJECT_KEY": jira_key,
+                            "JIRA_PROJECT_NAME": jira_name,
+                            "JIRA_SOURCE": jira_source,
+                            "MCP_JIRA_COMMAND": jira_cmd,
+                            "MCP_JIRA_PACKAGE": jira_pkg,
+                            "MCP_JIRA_ARGS": jira_args,
+                            "JIRA_API_TOKEN": jira_token,
+                        }
+                    )
+                    st.session_state.jira_mcp_status = None
+                    st.success("Saved · " + ", ".join(saved) if saved else "Nothing to save")
+                    st.rerun()
+
 with tab_analyze:
     try:
         cig = CIGClient()
@@ -459,6 +812,12 @@ with tab_analyze:
                 st.error(f"Analysis failed: {exc}")
                 report = None
 
+        posted = None
+        if report:
+            gh_target = resolve_github_pr_number(report.pr_number)
+            with st.spinner(f"Posting AEGIS report to GitHub PR #{gh_target}..."):
+                posted = maybe_post_report(report)
+
         if report:
             st.markdown(
                 f'<div class="glass pr-head" style="margin-bottom:14px">'
@@ -472,11 +831,39 @@ with tab_analyze:
                 unsafe_allow_html=True,
             )
 
+            if posted and posted.get("ok"):
+                gh_n = posted.get("github_pr_number")
+                repo = posted.get("repo") or ""
+                mapped = (
+                    f" (CIG #{posted.get('pr_number')})"
+                    if gh_n and posted.get("pr_number") != gh_n
+                    else ""
+                )
+                link = posted.get("html_url")
+                msg = f"Posted analysis to GitHub PR #{gh_n} on `{repo}`{mapped}."
+                if link:
+                    st.success(msg)
+                    st.markdown(f"[Open comment]({link})")
+                else:
+                    st.success(msg)
+            elif posted and posted.get("skipped"):
+                st.caption(
+                    "GitHub comment skipped — set `GITHUB_TOKEN`, "
+                    "`GITHUB_REPO_OWNER`, `GITHUB_REPO_NAME` to auto-post."
+                )
+            elif posted and not posted.get("ok"):
+                st.warning(
+                    f"Analysis completed, but GitHub comment failed: {posted.get('error')}"
+                )
+
             stories = report.stories
             if stories:
+                story_labels = [
+                    f"{s['key']} · {s['title']} ({s['status']})" for s in stories
+                ]
                 st.markdown(
                     f'<b>Linked stories</b> '
-                    f'{chips([f"{s["key"]} · {s["title"]} ({s["status"]})" for s in stories], "ok")}',
+                    f'{chips(story_labels, "ok")}',
                     unsafe_allow_html=True,
                 )
 

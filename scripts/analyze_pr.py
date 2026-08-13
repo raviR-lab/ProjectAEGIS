@@ -22,6 +22,11 @@ def main() -> None:
     parser.add_argument("--fast", action="store_true",
                         help="Deterministic analysis only (no LLM agents)")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--no-github-comment",
+        action="store_true",
+        help="Do not auto-post the analysis as a GitHub PR comment",
+    )
     args = parser.parse_args()
 
     orchestrator = AegisOrchestrator()
@@ -29,6 +34,21 @@ def main() -> None:
         report = orchestrator.analyze_pr(args.pr, use_llm=not args.fast,
                                          verbose=args.verbose)
         print(format_report(report))
+        if not args.no_github_comment:
+            from aegis.integrations.github_comments import maybe_post_report
+
+            posted = maybe_post_report(report)
+            if posted.get("ok"):
+                print(
+                    f"Posted GitHub comment on PR #{posted.get('github_pr_number')} "
+                    f"({posted.get('repo')})"
+                )
+                if posted.get("html_url"):
+                    print(posted["html_url"])
+            elif posted.get("skipped"):
+                print("GitHub comment skipped (not configured).")
+            else:
+                print(f"GitHub comment failed: {posted.get('error')}")
     elif args.deploy:
         services = args.services or []
         result = orchestrator.assess_deployment(args.deploy, services, verbose=args.verbose)
