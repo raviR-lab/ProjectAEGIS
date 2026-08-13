@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from aegis import config
@@ -16,15 +15,6 @@ DEFAULT_CIG_TO_GITHUB = {
     482: 1,  # payment refund / gateway
     500: 2,  # auth signing key rotation
 }
-
-
-def _cfg(name: str, default: str | None = None) -> str:
-    getter = getattr(config, "get", None)
-    if callable(getter):
-        val = getter(name, default)
-    else:
-        val = getattr(config, name, None) or os.getenv(name, default)
-    return (val or "").strip()
 
 
 def parse_pr_map(raw: str | None) -> dict[int, int]:
@@ -43,7 +33,7 @@ def parse_pr_map(raw: str | None) -> dict[int, int]:
 
 def resolve_github_pr_number(pr_number: int) -> int:
     """Map a CIG PR number onto the live GitHub PR number."""
-    mapping = {**DEFAULT_CIG_TO_GITHUB, **parse_pr_map(_cfg("GITHUB_PR_MAP"))}
+    mapping = {**DEFAULT_CIG_TO_GITHUB, **parse_pr_map(config.setting("GITHUB_PR_MAP"))}
     return mapping.get(int(pr_number), int(pr_number))
 
 
@@ -178,19 +168,14 @@ def maybe_post_report(report: AegisReport) -> dict[str, Any]:
         }
     try:
         return post_report_to_pr(report, as_review=False)
-    except GitHubError as exc:
-        return {
+    except Exception as exc:
+        out: dict[str, Any] = {
             "ok": False,
             "skipped": False,
             "error": str(exc),
-            "body": exc.body,
             "pr_number": report.pr_number,
             "github_pr_number": resolve_github_pr_number(report.pr_number or 0),
         }
-    except Exception as exc:
-        return {
-            "ok": False,
-            "skipped": False,
-            "error": str(exc),
-            "pr_number": report.pr_number,
-        }
+        if isinstance(exc, GitHubError):
+            out["body"] = exc.body
+        return out

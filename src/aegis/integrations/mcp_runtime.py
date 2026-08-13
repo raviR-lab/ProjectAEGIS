@@ -15,16 +15,10 @@ from typing import Any
 
 from aegis import config
 
-
-def _cfg(name: str, default: str | None = None) -> str:
-    getter = getattr(config, "get", None)
-    if callable(getter):
-        val = getter(name, default)
-    else:
-        val = getattr(config, name, None) or os.getenv(name, default)
-    return (val or "").strip()
-
 log = logging.getLogger(__name__)
+
+GITHUB_MCP_PACKAGE = "@modelcontextprotocol/server-github"
+JIRA_MCP_PACKAGE = "@aashari/mcp-server-atlassian-jira"
 
 DEFAULT_TIMEOUT = 45.0
 
@@ -149,45 +143,43 @@ def call_mcp_tool(
     )
 
 
-def github_mcp_command() -> tuple[str, list[str], dict[str, str]]:
-    cmd = _cfg("MCP_GITHUB_COMMAND", "npx") or "npx"
-    package = _cfg("MCP_GITHUB_PACKAGE", "@modelcontextprotocol/server-github") or (
-        "@modelcontextprotocol/server-github"
-    )
-    args_raw = _cfg("MCP_GITHUB_ARGS")
-    if args_raw:
-        args = args_raw.split()
-    else:
-        args = ["-y", package]
-    token = _cfg("GITHUB_TOKEN")
-    env = {"GITHUB_PERSONAL_ACCESS_TOKEN": token}
-    return cmd, args, env
+def _stdio_launch(command_key: str, package_key: str, args_key: str, default_package: str) -> tuple[str, list[str], str]:
+    cmd = config.setting(command_key, "npx") or "npx"
+    package = config.setting(package_key, default_package) or default_package
+    args_raw = config.setting(args_key)
+    args = args_raw.split() if args_raw else ["-y", package]
+    return cmd, args, package
 
 
-def jira_mcp_command() -> tuple[str, list[str], dict[str, str]]:
-    cmd = _cfg("MCP_JIRA_COMMAND", "npx") or "npx"
-    package = _cfg("MCP_JIRA_PACKAGE", "@aashari/mcp-server-atlassian-jira") or (
-        "@aashari/mcp-server-atlassian-jira"
-    )
-    args_raw = _cfg("MCP_JIRA_ARGS")
-    if args_raw:
-        args = args_raw.split()
-    else:
-        args = ["-y", package]
-
-    base = _cfg("JIRA_BASE_URL").rstrip("/")
-    site = (
-        base.replace("https://", "")
+def _atlassian_site_name(base_url: str) -> str:
+    return (
+        (base_url or "")
+        .rstrip("/")
+        .replace("https://", "")
         .replace("http://", "")
         .replace(".atlassian.net", "")
         .strip("/")
     )
+
+
+def github_mcp_command() -> tuple[str, list[str], dict[str, str], str]:
+    cmd, args, package = _stdio_launch(
+        "MCP_GITHUB_COMMAND", "MCP_GITHUB_PACKAGE", "MCP_GITHUB_ARGS", GITHUB_MCP_PACKAGE
+    )
+    env = {"GITHUB_PERSONAL_ACCESS_TOKEN": config.setting("GITHUB_TOKEN")}
+    return cmd, args, env, package
+
+
+def jira_mcp_command() -> tuple[str, list[str], dict[str, str], str]:
+    cmd, args, package = _stdio_launch(
+        "MCP_JIRA_COMMAND", "MCP_JIRA_PACKAGE", "MCP_JIRA_ARGS", JIRA_MCP_PACKAGE
+    )
     env = {
-        "ATLASSIAN_SITE_NAME": site,
-        "ATLASSIAN_USER_EMAIL": _cfg("JIRA_EMAIL"),
-        "ATLASSIAN_API_TOKEN": _cfg("JIRA_API_TOKEN"),
+        "ATLASSIAN_SITE_NAME": _atlassian_site_name(config.setting("JIRA_BASE_URL")),
+        "ATLASSIAN_USER_EMAIL": config.setting("JIRA_EMAIL"),
+        "ATLASSIAN_API_TOKEN": config.setting("JIRA_API_TOKEN"),
     }
-    return cmd, args, env
+    return cmd, args, env, package
 
 
 def _mask_secret(value: str) -> str:
@@ -198,70 +190,93 @@ def _mask_secret(value: str) -> str:
     return f"set ({len(value)} chars, {value[:4]}…{value[-4:]})"
 
 
-def github_mcp_details() -> dict[str, Any]:
-    """Current GitHub MCP spawn config for the Infrastructure page (no secrets)."""
-    cmd, args, env = github_mcp_command()
-    token = env.get("GITHUB_PERSONAL_ACCESS_TOKEN") or ""
+def _spawn_details(cmd: str, args: list[str], package: str, token: str, extra: dict[str, Any]) -> dict[str, Any]:
     return {
-        "kind": "GitHub",
         "transport": "stdio / MCP",
         "command": cmd,
         "args": " ".join(args),
         "spawn": f"{cmd} {' '.join(args)}".strip(),
-        "package": _cfg("MCP_GITHUB_PACKAGE", "@modelcontextprotocol/server-github")
-        or "@modelcontextprotocol/server-github",
-        "env_injected": "GITHUB_PERSONAL_ACCESS_TOKEN ← GITHUB_TOKEN",
+        "package": package,
         "token": _mask_secret(token),
         "token_set": bool(token),
-        "owner": _cfg("GITHUB_REPO_OWNER"),
-        "repo": _cfg("GITHUB_REPO_NAME"),
-        "full_name": "/".join(
-            p for p in (_cfg("GITHUB_REPO_OWNER"), _cfg("GITHUB_REPO_NAME")) if p
-        ),
-        "source": _cfg("GITHUB_SOURCE", "auto") or "auto",
-        "pr_map": _cfg("GITHUB_PR_MAP"),
+        **extra,
     }
+
+
+def github_mcp_details() -> dict[str, Any]:
+    """Current GitHub MCP spawn config for the Infrastructure page (no secrets)."""
+    cmd, args, env, package = github_mcp_command()
+    owner = config.setting("GITHUB_REPO_OWNER")
+    repo = config.setting("GITHUB_REPO_NAME")
+    return _spawn_details(
+        cmd,
+        args,
+        package,
+        env.get("GITHUB_PERSONAL_ACCESS_TOKEN") or "",
+        {
+            "kind": "GitHub",
+            "env_injected": "GITHUB_PERSONAL_ACCESS_TOKEN ← GITHUB_TOKEN",
+            "owner": owner,
+            "repo": repo,
+            "full_name": "/".join(p for p in (owner, repo) if p),
+            "source": config.setting("GITHUB_SOURCE", "auto") or "auto",
+            "pr_map": config.setting("GITHUB_PR_MAP"),
+        },
+    )
 
 
 def jira_mcp_details() -> dict[str, Any]:
     """Current Jira MCP spawn config for the Infrastructure page (no secrets)."""
-    cmd, args, env = jira_mcp_command()
-    token = env.get("ATLASSIAN_API_TOKEN") or ""
-    return {
-        "kind": "Jira",
-        "transport": "stdio / MCP",
-        "command": cmd,
-        "args": " ".join(args),
-        "spawn": f"{cmd} {' '.join(args)}".strip(),
-        "package": _cfg("MCP_JIRA_PACKAGE", "@aashari/mcp-server-atlassian-jira")
-        or "@aashari/mcp-server-atlassian-jira",
-        "env_injected": "ATLASSIAN_SITE_NAME / USER_EMAIL / API_TOKEN",
-        "token": _mask_secret(token),
-        "token_set": bool(token),
-        "site": env.get("ATLASSIAN_SITE_NAME") or "",
-        "email": env.get("ATLASSIAN_USER_EMAIL") or _cfg("JIRA_EMAIL"),
-        "base_url": _cfg("JIRA_BASE_URL"),
-        "project_key": _cfg("JIRA_PROJECT_KEY", "AEG") or "AEG",
-        "project_name": _cfg("JIRA_PROJECT_NAME", "Project AEGIS") or "Project AEGIS",
-        "source": _cfg("JIRA_SOURCE", "local") or "local",
-    }
-
-
-def call_github_tool(tool: str, arguments: dict[str, Any] | None = None) -> Any:
-    cmd, args, env = github_mcp_command()
-    if not env.get("GITHUB_PERSONAL_ACCESS_TOKEN"):
-        raise McpError("GITHUB_TOKEN missing for GitHub MCP server")
-    return call_mcp_tool(
-        command=cmd, args=args, env=env, tool=tool, arguments=arguments
+    cmd, args, env, package = jira_mcp_command()
+    return _spawn_details(
+        cmd,
+        args,
+        package,
+        env.get("ATLASSIAN_API_TOKEN") or "",
+        {
+            "kind": "Jira",
+            "env_injected": "ATLASSIAN_SITE_NAME / USER_EMAIL / API_TOKEN",
+            "site": env.get("ATLASSIAN_SITE_NAME") or "",
+            "email": env.get("ATLASSIAN_USER_EMAIL") or config.setting("JIRA_EMAIL"),
+            "base_url": config.setting("JIRA_BASE_URL"),
+            "project_key": config.setting("JIRA_PROJECT_KEY", "AEG") or "AEG",
+            "project_name": config.setting("JIRA_PROJECT_NAME", "Project AEGIS") or "Project AEGIS",
+            "source": config.setting("JIRA_SOURCE", "local") or "local",
+        },
     )
 
 
+def call_github_tool(tool: str, arguments: dict[str, Any] | None = None) -> Any:
+    cmd, args, env, _package = github_mcp_command()
+    if not env.get("GITHUB_PERSONAL_ACCESS_TOKEN"):
+        raise McpError("GITHUB_TOKEN missing for GitHub MCP server")
+    return call_mcp_tool(command=cmd, args=args, env=env, tool=tool, arguments=arguments)
+
+
 def call_jira_tool(tool: str, arguments: dict[str, Any] | None = None) -> Any:
-    cmd, args, env = jira_mcp_command()
+    cmd, args, env, _package = jira_mcp_command()
     if not env.get("ATLASSIAN_API_TOKEN") or not env.get("ATLASSIAN_USER_EMAIL"):
         raise McpError("Jira MCP needs JIRA_EMAIL and JIRA_API_TOKEN in .env")
     if not env.get("ATLASSIAN_SITE_NAME"):
         raise McpError("Jira MCP needs JIRA_BASE_URL (site name) in .env")
-    return call_mcp_tool(
-        command=cmd, args=args, env=env, tool=tool, arguments=arguments
-    )
+    return call_mcp_tool(command=cmd, args=args, env=env, tool=tool, arguments=arguments)
+
+
+def mcp_status_unconfigured(error: str) -> dict[str, Any]:
+    return {"configured": False, "ok": False, "transport": "mcp", "error": error}
+
+
+def mcp_status_failed(exc: BaseException) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "configured": True,
+        "ok": False,
+        "transport": "mcp",
+        "error": str(exc),
+    }
+    status = getattr(exc, "status", None)
+    body = getattr(exc, "body", None)
+    if status is not None:
+        payload["status"] = status
+    if body is not None:
+        payload["body"] = body
+    return payload

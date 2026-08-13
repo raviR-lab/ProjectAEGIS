@@ -10,13 +10,18 @@ so later story sync can reuse this client without changing analysis.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
 
 from aegis import config
-from aegis.integrations.mcp_runtime import McpError, call_jira_tool
+from aegis.integrations.mcp_runtime import (
+    JIRA_MCP_PACKAGE,
+    McpError,
+    call_jira_tool,
+    mcp_status_failed,
+    mcp_status_unconfigured,
+)
 
 
 class JiraError(RuntimeError):
@@ -26,27 +31,22 @@ class JiraError(RuntimeError):
         self.body = body
 
 
-def _cfg(name: str, default: str | None = None) -> str:
-    getter = getattr(config, "get", None)
-    if callable(getter):
-        val = getter(name, default)
-    else:
-        val = getattr(config, name, None) or os.getenv(name, default)
-    return (val or "").strip()
-
-
 def jira_configured() -> bool:
-    return bool(_cfg("JIRA_BASE_URL") and _cfg("JIRA_EMAIL") and _cfg("JIRA_API_TOKEN"))
+    return bool(
+        config.setting("JIRA_BASE_URL")
+        and config.setting("JIRA_EMAIL")
+        and config.setting("JIRA_API_TOKEN")
+    )
 
 
 def project_key() -> str:
-    return (_cfg("JIRA_PROJECT_KEY", "AEG") or "AEG").upper()
+    return (config.setting("JIRA_PROJECT_KEY", "AEG") or "AEG").upper()
 
 
 def _require_settings() -> tuple[str, str, str]:
-    base = _cfg("JIRA_BASE_URL").rstrip("/")
-    email = _cfg("JIRA_EMAIL")
-    token = _cfg("JIRA_API_TOKEN")
+    base = config.setting("JIRA_BASE_URL").rstrip("/")
+    email = config.setting("JIRA_EMAIL")
+    token = config.setting("JIRA_API_TOKEN")
     missing = [
         name
         for name, val in (
@@ -165,12 +165,9 @@ class JiraClient:
 
 def connection_status() -> dict[str, Any]:
     if not jira_configured():
-        return {
-            "configured": False,
-            "ok": False,
-            "transport": "mcp",
-            "error": "Set JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN in .env",
-        }
+        return mcp_status_unconfigured(
+            "Set JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN in .env"
+        )
     try:
         client = JiraClient.from_config()
         me = client.myself()
@@ -179,29 +176,14 @@ def connection_status() -> dict[str, Any]:
             "configured": True,
             "ok": True,
             "transport": "mcp",
-            "mcp_server": _cfg("MCP_JIRA_PACKAGE", "@aashari/mcp-server-atlassian-jira")
-            or "@aashari/mcp-server-atlassian-jira",
+            "mcp_server": config.setting("MCP_JIRA_PACKAGE", JIRA_MCP_PACKAGE) or JIRA_MCP_PACKAGE,
             "display_name": me.get("displayName"),
-            "email": me.get("emailAddress") or _cfg("JIRA_EMAIL"),
+            "email": me.get("emailAddress") or config.setting("JIRA_EMAIL"),
             "account_id": me.get("accountId"),
-            "site": _cfg("JIRA_BASE_URL"),
+            "site": config.setting("JIRA_BASE_URL"),
             "project_key": project_key(),
             "project_exists": proj is not None,
             "project_name": (proj or {}).get("name"),
         }
-    except JiraError as exc:
-        return {
-            "configured": True,
-            "ok": False,
-            "transport": "mcp",
-            "error": str(exc),
-            "body": exc.body,
-            "status": exc.status,
-        }
     except Exception as exc:
-        return {
-            "configured": True,
-            "ok": False,
-            "transport": "mcp",
-            "error": str(exc),
-        }
+        return mcp_status_failed(exc)

@@ -16,28 +16,20 @@ for _mod_name in (
     "aegis.integrations.github_client",
     "aegis.integrations.github_comments",
     "aegis.integrations.jira_client",
+    "aegis.ui.mcp_panel",
 ):
     if _mod_name in sys.modules:
         importlib.reload(sys.modules[_mod_name])
 
 import streamlit as st
 
-from aegis import config
 from aegis.agents.registry import AGENT_SPECS
 from aegis.core.orchestrator import AegisOrchestrator, AegisReport
 from aegis.graph import queries
 from aegis.graph.neo4j import CIGClient
-from aegis.integrations.github_client import (
-    connection_status as github_connection_status,
-    github_configured,
-)
 from aegis.integrations.github_comments import maybe_post_report, resolve_github_pr_number
-from aegis.integrations.jira_client import (
-    connection_status as jira_connection_status,
-    jira_configured,
-)
-from aegis.integrations.mcp_runtime import github_mcp_details, jira_mcp_details
 from aegis.llm.ollama import OllamaClient
+from aegis.ui.mcp_panel import render_mcp_panel
 
 st.set_page_config(page_title="Project AEGIS", layout="wide")
 
@@ -292,50 +284,6 @@ def status_rows_html(title, rows) -> str:
     )
 
 
-def mcp_probe_state(status: dict | None, configured: bool) -> tuple[str, str]:
-    """(variant, label) for a connection tile."""
-    if status and status.get("ok"):
-        return "ok", "Connected"
-    if status and status.get("configured") and not status.get("ok"):
-        return "bad", "Failed"
-    if configured:
-        return "warn", "Ready"
-    return "warn", "Not set"
-
-
-def conn_card_html(
-    *,
-    kind: str,
-    glyph: str,
-    glyph_class: str,
-    headline: str,
-    facts: list[tuple[str, str]],
-    spawn: str,
-    variant: str,
-    pill: str,
-    error: str | None = None,
-) -> str:
-    fact_html = "".join(
-        f'<div class="conn-fact"><div class="k">{html_escape(k)}</div>'
-        f'<div class="v">{html_escape(v)}</div></div>'
-        for k, v in facts
-    )
-    err = (
-        f'<div class="conn-err">{html_escape(error)}</div>' if error else ""
-    )
-    return (
-        f'<div class="conn-card {variant}">'
-        f'<div class="conn-head">'
-        f'<div class="conn-glyph {glyph_class}">{html_escape(glyph)}</div>'
-        f'<div><div class="conn-name">{html_escape(kind)}</div>'
-        f'<div class="conn-via">MCP stdio · no in-app REST</div></div>'
-        f'<span class="conn-pill {variant}">{html_escape(pill)}</span></div>'
-        f'<div class="conn-headline">{html_escape(headline or "Not configured")}</div>'
-        f'<div class="conn-facts">{fact_html}</div>'
-        f'<div class="term">{html_escape(spawn or "—")}</div>{err}</div>'
-    )
-
-
 def stat_html(label: str, value: str, delta: str = "", accent: bool = False) -> str:
     delta_html = f'<div class="delta">{delta}</div>' if delta else ""
     return (
@@ -550,230 +498,7 @@ with tab_health:
                 )
             st.markdown("</div>", unsafe_allow_html=True)
 
-    gh_details = github_mcp_details()
-    jira_details = jira_mcp_details()
-    gh_status = st.session_state.get("github_mcp_status")
-    jira_status = st.session_state.get("jira_mcp_status")
-    gh_var, gh_pill = mcp_probe_state(gh_status, github_configured())
-    jira_var, jira_pill = mcp_probe_state(jira_status, jira_configured())
-    if gh_status and gh_status.get("ok") and gh_status.get("full_name"):
-        gh_headline = gh_status["full_name"]
-    else:
-        gh_headline = gh_details.get("full_name") or "Connect a GitHub repo"
-    if jira_status and jira_status.get("ok") and jira_status.get("site"):
-        jira_headline = jira_status.get("project_name") or jira_status.get("site")
-    else:
-        jira_headline = (
-            jira_details.get("base_url")
-            or jira_details.get("site")
-            or "Connect a Jira site"
-        )
-    gh_error = None
-    if gh_status and not gh_status.get("ok") and not gh_status.get("skipped"):
-        gh_error = str(gh_status.get("error") or "Probe failed")[:180]
-    jira_error = None
-    if jira_status and not jira_status.get("ok") and not jira_status.get("skipped"):
-        jira_error = str(jira_status.get("error") or "Probe failed")[:180]
-
-    st.markdown('<div class="kicker">Integrations · MCP</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="section-title">GitHub &amp; Jira connections</div>'
-        '<div style="color:var(--muted);font-size:13.5px;margin:-4px 0 14px">'
-        "AEGIS talks to GitHub and Jira only through MCP. Credentials stay in "
-        "<code>.env</code> and are injected into the server process — never into REST clients. "
-        "Graph analysis still works if a connection is off.</div>",
-        unsafe_allow_html=True,
-    )
-    mcp_l, mcp_r = st.columns(2, gap="large")
-    with mcp_l:
-        st.markdown(
-            conn_card_html(
-                kind="GitHub",
-                glyph="GH",
-                glyph_class="gh",
-                headline=gh_headline,
-                facts=[
-                    ("Token", gh_details.get("token") or "not set"),
-                    ("Source", gh_details.get("source") or "auto"),
-                    ("PR map", gh_details.get("pr_map") or "none"),
-                    ("Package", gh_details.get("package") or "—"),
-                ],
-                spawn=gh_details.get("spawn") or "",
-                variant=gh_var,
-                pill=gh_pill,
-                error=gh_error,
-            ),
-            unsafe_allow_html=True,
-        )
-        if st.button(
-            "Test GitHub connection",
-            disabled=not github_configured(),
-            width="stretch",
-            help="Spawns the GitHub MCP server with your token and probes the repo.",
-        ):
-            with st.spinner("Talking to GitHub MCP…"):
-                st.session_state.github_mcp_status = github_connection_status()
-            st.rerun()
-        with st.expander("Edit GitHub connection", expanded=not github_configured()):
-            with st.form("github_mcp_config"):
-                g1, g2 = st.columns(2)
-                with g1:
-                    gh_owner = st.text_input(
-                        "Owner", value=config.get("GITHUB_REPO_OWNER") or ""
-                    )
-                with g2:
-                    gh_repo = st.text_input(
-                        "Repository", value=config.get("GITHUB_REPO_NAME") or ""
-                    )
-                gh_map = st.text_input(
-                    "CIG → GitHub PR map",
-                    value=config.get("GITHUB_PR_MAP") or "",
-                    placeholder="482:1, 500:2",
-                )
-                gh_source = st.selectbox(
-                    "When to use MCP",
-                    ["auto", "mcp", "fixture"],
-                    index=["auto", "mcp", "fixture"].index(
-                        (config.get("GITHUB_SOURCE", "auto") or "auto").lower()
-                        if (config.get("GITHUB_SOURCE", "auto") or "auto").lower()
-                        in {"auto", "mcp", "fixture"}
-                        else "auto"
-                    ),
-                )
-                gh_token = st.text_input(
-                    "Personal access token",
-                    type="password",
-                    value="",
-                    placeholder="••••  leave blank to keep current",
-                )
-                st.caption("Advanced MCP server")
-                gh_cmd = st.text_input(
-                    "Command",
-                    value=config.get("MCP_GITHUB_COMMAND", "npx") or "npx",
-                )
-                gh_pkg = st.text_input(
-                    "Package",
-                    value=config.get("MCP_GITHUB_PACKAGE", "@modelcontextprotocol/server-github")
-                    or "@modelcontextprotocol/server-github",
-                )
-                gh_args = st.text_input(
-                    "Args override",
-                    value=config.get("MCP_GITHUB_ARGS") or "",
-                    placeholder="-y <package>",
-                )
-                if st.form_submit_button("Save GitHub", type="primary"):
-                    saved = config.apply_updates(
-                        {
-                            "GITHUB_REPO_OWNER": gh_owner,
-                            "GITHUB_REPO_NAME": gh_repo,
-                            "GITHUB_SOURCE": gh_source,
-                            "GITHUB_PR_MAP": gh_map,
-                            "MCP_GITHUB_COMMAND": gh_cmd,
-                            "MCP_GITHUB_PACKAGE": gh_pkg,
-                            "MCP_GITHUB_ARGS": gh_args,
-                            "GITHUB_TOKEN": gh_token,
-                        }
-                    )
-                    st.session_state.github_mcp_status = None
-                    st.success("Saved · " + ", ".join(saved) if saved else "Nothing to save")
-                    st.rerun()
-    with mcp_r:
-        st.markdown(
-            conn_card_html(
-                kind="Jira",
-                glyph="JI",
-                glyph_class="jira",
-                headline=jira_headline,
-                facts=[
-                    ("Token", jira_details.get("token") or "not set"),
-                    ("Source", jira_details.get("source") or "local"),
-                    ("Project", jira_details.get("project_key") or "—"),
-                    ("Email", jira_details.get("email") or "not set"),
-                ],
-                spawn=jira_details.get("spawn") or "",
-                variant=jira_var,
-                pill=jira_pill,
-                error=jira_error,
-            ),
-            unsafe_allow_html=True,
-        )
-        if st.button(
-            "Test Jira connection",
-            disabled=not jira_configured(),
-            width="stretch",
-            help="Spawns the Jira MCP server and checks the site + project.",
-        ):
-            with st.spinner("Talking to Jira MCP…"):
-                st.session_state.jira_mcp_status = jira_connection_status()
-            st.rerun()
-        jira_source_val = (config.get("JIRA_SOURCE", "local") or "local").lower()
-        jira_source_opts = ["mcp", "cloud", "local"]
-        with st.expander("Edit Jira connection", expanded=not jira_configured()):
-            with st.form("jira_mcp_config"):
-                jira_url = st.text_input(
-                    "Site URL",
-                    value=config.get("JIRA_BASE_URL") or "",
-                    placeholder="https://your-site.atlassian.net",
-                )
-                j1, j2 = st.columns(2)
-                with j1:
-                    jira_email = st.text_input(
-                        "Email", value=config.get("JIRA_EMAIL") or ""
-                    )
-                with j2:
-                    jira_key = st.text_input(
-                        "Project key",
-                        value=config.get("JIRA_PROJECT_KEY", "AEG") or "AEG",
-                    )
-                jira_name = st.text_input(
-                    "Project name",
-                    value=config.get("JIRA_PROJECT_NAME", "Project AEGIS") or "Project AEGIS",
-                )
-                jira_source = st.selectbox(
-                    "When to use MCP",
-                    jira_source_opts,
-                    index=jira_source_opts.index(jira_source_val)
-                    if jira_source_val in jira_source_opts
-                    else 2,
-                )
-                jira_token = st.text_input(
-                    "API token",
-                    type="password",
-                    value="",
-                    placeholder="••••  leave blank to keep current",
-                )
-                st.caption("Advanced MCP server")
-                jira_cmd = st.text_input(
-                    "Command",
-                    value=config.get("MCP_JIRA_COMMAND", "npx") or "npx",
-                )
-                jira_pkg = st.text_input(
-                    "Package",
-                    value=config.get("MCP_JIRA_PACKAGE", "@aashari/mcp-server-atlassian-jira")
-                    or "@aashari/mcp-server-atlassian-jira",
-                )
-                jira_args = st.text_input(
-                    "Args override",
-                    value=config.get("MCP_JIRA_ARGS") or "",
-                    placeholder="-y <package>",
-                )
-                if st.form_submit_button("Save Jira", type="primary"):
-                    saved = config.apply_updates(
-                        {
-                            "JIRA_BASE_URL": jira_url,
-                            "JIRA_EMAIL": jira_email,
-                            "JIRA_PROJECT_KEY": jira_key,
-                            "JIRA_PROJECT_NAME": jira_name,
-                            "JIRA_SOURCE": jira_source,
-                            "MCP_JIRA_COMMAND": jira_cmd,
-                            "MCP_JIRA_PACKAGE": jira_pkg,
-                            "MCP_JIRA_ARGS": jira_args,
-                            "JIRA_API_TOKEN": jira_token,
-                        }
-                    )
-                    st.session_state.jira_mcp_status = None
-                    st.success("Saved · " + ", ".join(saved) if saved else "Nothing to save")
-                    st.rerun()
+    render_mcp_panel()
 
 with tab_analyze:
     try:

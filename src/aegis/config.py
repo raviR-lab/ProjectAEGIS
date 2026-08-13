@@ -19,6 +19,11 @@ def get(key: str, default: str | None = None) -> str | None:
     return val
 
 
+def setting(key: str, default: str | None = None) -> str:
+    """Stripped config value; empty string when unset."""
+    return (get(key, default) or "").strip()
+
+
 NEO4J_URI = env("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = env("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = env("NEO4J_PASSWORD", "changeme")

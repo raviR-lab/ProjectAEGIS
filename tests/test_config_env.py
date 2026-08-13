@@ -36,6 +36,12 @@ class UpsertEnvTest(unittest.TestCase):
             self.assertIn("GITHUB_TOKEN=keepme", path.read_text(encoding="utf-8"))
 
 
+class SettingHelperTest(unittest.TestCase):
+    def test_setting_strips_and_defaults(self):
+        self.assertEqual(config.setting("AEGIS_MISSING_KEY_XYZ", "  fallback  "), "fallback")
+        self.assertEqual(config.setting("AEGIS_MISSING_KEY_XYZ"), "")
+
+
 class McpDetailsNoSecretsTest(unittest.TestCase):
     def test_github_details_mask_token(self):
         details = github_mcp_details()
