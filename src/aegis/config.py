@@ -48,11 +48,16 @@ JIRA_PROJECT_KEY = env("JIRA_PROJECT_KEY", "AEG")
 JIRA_PROJECT_NAME = env("JIRA_PROJECT_NAME", "Project AEGIS")
 
 # MCP stdio servers (GitHub + Jira — no in-app REST)
+# Versions are pinned to reduce supply-chain risk from `npx -y`.
 MCP_GITHUB_COMMAND = env("MCP_GITHUB_COMMAND", "npx")
-MCP_GITHUB_PACKAGE = env("MCP_GITHUB_PACKAGE", "@modelcontextprotocol/server-github")
+MCP_GITHUB_PACKAGE = env(
+    "MCP_GITHUB_PACKAGE", "@modelcontextprotocol/server-github@2025.4.8"
+)
 MCP_GITHUB_ARGS = env("MCP_GITHUB_ARGS")
 MCP_JIRA_COMMAND = env("MCP_JIRA_COMMAND", "npx")
-MCP_JIRA_PACKAGE = env("MCP_JIRA_PACKAGE", "@aashari/mcp-server-atlassian-jira")
+MCP_JIRA_PACKAGE = env(
+    "MCP_JIRA_PACKAGE", "@aashari/mcp-server-atlassian-jira@3.3.0"
+)
 MCP_JIRA_ARGS = env("MCP_JIRA_ARGS")
 
 # Keys the Infrastructure page can edit and persist to .env
@@ -77,6 +82,36 @@ MCP_CONFIG_KEYS = (
 )
 
 SECRET_KEYS = frozenset({"GITHUB_TOKEN", "JIRA_API_TOKEN", "NEO4J_PASSWORD"})
+
+
+# ---------------------------------------------------------------------------
+# Credential validation (least-privilege encouragement)
+# ---------------------------------------------------------------------------
+
+def github_token_quality(token: str) -> tuple[str, str]:
+    """Return (level, hint) for a GitHub token.
+
+    Levels: ok (fine-grained), classic, invalid.
+    Fine-grained PATs start with 'github_pat_'; classic PATs are 40 hex chars.
+    """
+    token = (token or "").strip()
+    if not token:
+        return "invalid", "Token is empty."
+    if token.startswith("github_pat_"):
+        return "ok", "Fine-grained token (least privilege)."
+    if len(token) == 40 and token.isalnum():
+        return "classic", "Classic PAT — prefers broad scopes. Prefer a fine-grained token."
+    return "invalid", "Unrecognized token format."
+
+
+def jira_token_quality(token: str) -> tuple[str, str]:
+    """Jira API tokens are opaque base64-ish strings; flag suspiciously short ones."""
+    token = (token or "").strip()
+    if not token:
+        return "invalid", "Token is empty."
+    if len(token) < 12:
+        return "invalid", "Jira API token looks too short."
+    return "ok", "OK"
 
 
 def upsert_env_file(updates: dict[str, str], path: Path | None = None) -> None:

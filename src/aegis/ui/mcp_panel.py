@@ -115,6 +115,11 @@ def _advanced_server_fields(prefix: str, command_key: str, package_key: str, arg
 
 def render_mcp_panel() -> None:
     """Full-width GitHub + Jira MCP cards, test actions, and editors."""
+    if (config.setting("NEO4J_PASSWORD") or "").strip() in {"", "changeme"}:
+        st.warning(
+            "Neo4j is using the default password. Set NEO4J_PASSWORD in .env "
+            "to a strong value before exposing this app beyond localhost."
+        )
     gh_details = github_mcp_details()
     jira_details = jira_mcp_details()
     gh_status = st.session_state.get("github_mcp_status")
@@ -199,6 +204,15 @@ def render_mcp_panel() -> None:
                     GITHUB_MCP_PACKAGE,
                 )
                 if st.form_submit_button("Save GitHub", type="primary"):
+                    if gh_token:
+                        gh_level, gh_hint = config.github_token_quality(gh_token)
+                        if gh_level == "classic":
+                            st.warning(
+                                "Classic PAT detected — consider a fine-grained token "
+                                "scoped to Contents/Metadata/Pull requests/Issues."
+                            )
+                        elif gh_level == "invalid":
+                            st.error("That GitHub token looks invalid. Double-check it.")
                     _save(
                         "github_mcp_status",
                         {
@@ -289,6 +303,10 @@ def render_mcp_panel() -> None:
                     JIRA_MCP_PACKAGE,
                 )
                 if st.form_submit_button("Save Jira", type="primary"):
+                    if jira_token:
+                        jira_level, _jhint = config.jira_token_quality(jira_token)
+                        if jira_level == "invalid":
+                            st.error("That Jira API token looks invalid. Double-check it.")
                     _save(
                         "jira_mcp_status",
                         {

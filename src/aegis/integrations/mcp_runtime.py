@@ -11,16 +11,51 @@ import json
 import logging
 import os
 import shutil
+import time
+from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from aegis import config
 
 log = logging.getLogger(__name__)
 
-GITHUB_MCP_PACKAGE = "@modelcontextprotocol/server-github"
-JIRA_MCP_PACKAGE = "@aashari/mcp-server-atlassian-jira"
+GITHUB_MCP_PACKAGE = "@modelcontextprotocol/server-github@2025.4.8"
+JIRA_MCP_PACKAGE = "@aashari/mcp-server-atlassian-jira@3.3.0"
 
 DEFAULT_TIMEOUT = 45.0
+
+# Env vars allowed to pass through into spawned MCP server processes.
+# Everything else on the host is deliberately dropped so secrets in
+# os.environ (CI vars, cloud keys, …) never reach the npm subprocess.
+ALLOWED_SPAWN_ENV = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "TZ",
+        "NO_PROXY",
+        "no_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        # Injected MCP creds (set explicitly per server below).
+        "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "ATLASSIAN_SITE_NAME",
+        "ATLASSIAN_USER_EMAIL",
+        "ATLASSIAN_API_TOKEN",
+    }
+)
+
+# Per-integration rate limit: max tool calls per minute (token bucket).
+RATE_LIMITS: dict[str, tuple[float, float]] = {
+    "github": (30.0, 1.0),  # 30 calls / min, refill 1/s
+    "jira": (30.0, 1.0),
+}
 
 
 class McpError(RuntimeError):
@@ -104,7 +139,14 @@ async def _call_tool_async(
             "Install Node.js (for npx) in the AEGIS runtime."
         )
 
-    merged_env = {**os.environ, **{k: str(v) for k, v in env.items() if v is not None}}
+    # Pass only a whitelist of host env vars + the injected MCP credentials.
+    # Host secrets in os.environ must never reach the npm subprocess.
+    merged_env = {
+        k: v
+        for k, v in os.environ.items()
+        if k in ALLOWED_SPAWN_ENV
+    }
+    merged_env.update({k: str(v) for k, v in env.items() if v is not None})
     params = StdioServerParameters(command=command, args=args, env=merged_env)
 
     async def _inner():
@@ -141,6 +183,81 @@ def call_mcp_tool(
             timeout=timeout,
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# Security: rate limiting + audit trail (per integration)
+# ---------------------------------------------------------------------------
+
+_rate_buckets: dict[str, dict[str, float]] = {}
+_rate_lock = Lock()
+
+
+def _audit_log_path() -> Path:
+    configured = config.setting("AEGIS_AUDIT_LOG")
+    if configured:
+        return Path(configured)
+    return Path("/tmp") / "aegis-mcp-audit.jsonl"
+
+
+def _audit(integration: str, tool: str, arguments: dict[str, Any] | None, ok: bool, err: str | None, latency_ms: float) -> None:
+    """Append one JSONL line per MCP tool call (no credential material)."""
+    try:
+        entry = {
+            "ts": time.time(),
+            "iso": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "integration": integration,
+            "tool": tool,
+            "ok": ok,
+            "latency_ms": round(latency_ms, 1),
+            "err": (err or "")[:200],
+            "arg_keys": sorted((arguments or {}).keys()),
+        }
+        path = _audit_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry) + "\n")
+    except Exception:  # audit must never break a tool call
+        log.exception("audit log write failed")
+
+
+def rate_limit_check(integration: str) -> None:
+    """Raise McpError if the integration exceeds its per-minute budget."""
+    limit, refill = RATE_LIMITS.get(integration, (30.0, 1.0))
+    now = time.monotonic()
+    with _rate_lock:
+        bucket = _rate_buckets.setdefault(integration, {"tokens": limit, "last": now})
+        elapsed = now - bucket["last"]
+        bucket["tokens"] = min(limit, bucket["tokens"] + elapsed * refill)
+        bucket["last"] = now
+        if bucket["tokens"] < 1.0:
+            raise McpError(
+                f"MCP integration '{integration}' rate limit exceeded "
+                f"({limit:.0f} calls/min). Try again shortly."
+            )
+        bucket["tokens"] -= 1.0
+
+
+def run_ratelimited(
+    integration: str,
+    fn,
+    *,
+    tool: str,
+    arguments: dict[str, Any] | None = None,
+) -> Any:
+    """Rate-limit + audit a wrapped MCP call; always records an audit line."""
+    start = time.monotonic()
+    err: str | None = None
+    ok = True
+    try:
+        rate_limit_check(integration)
+        return fn()
+    except Exception as exc:  # audit failure path
+        ok = False
+        err = str(exc)
+        raise
+    finally:
+        _audit(integration, tool, arguments, ok, err, (time.monotonic() - start) * 1000.0)
 
 
 def _stdio_launch(command_key: str, package_key: str, args_key: str, default_package: str) -> tuple[str, list[str], str]:
@@ -250,7 +367,12 @@ def call_github_tool(tool: str, arguments: dict[str, Any] | None = None) -> Any:
     cmd, args, env, _package = github_mcp_command()
     if not env.get("GITHUB_PERSONAL_ACCESS_TOKEN"):
         raise McpError("GITHUB_TOKEN missing for GitHub MCP server")
-    return call_mcp_tool(command=cmd, args=args, env=env, tool=tool, arguments=arguments)
+    return run_ratelimited(
+        "github",
+        lambda: call_mcp_tool(command=cmd, args=args, env=env, tool=tool, arguments=arguments),
+        tool=tool,
+        arguments=arguments,
+    )
 
 
 def call_jira_tool(tool: str, arguments: dict[str, Any] | None = None) -> Any:
@@ -259,7 +381,12 @@ def call_jira_tool(tool: str, arguments: dict[str, Any] | None = None) -> Any:
         raise McpError("Jira MCP needs JIRA_EMAIL and JIRA_API_TOKEN in .env")
     if not env.get("ATLASSIAN_SITE_NAME"):
         raise McpError("Jira MCP needs JIRA_BASE_URL (site name) in .env")
-    return call_mcp_tool(command=cmd, args=args, env=env, tool=tool, arguments=arguments)
+    return run_ratelimited(
+        "jira",
+        lambda: call_mcp_tool(command=cmd, args=args, env=env, tool=tool, arguments=arguments),
+        tool=tool,
+        arguments=arguments,
+    )
 
 
 def mcp_status_unconfigured(error: str) -> dict[str, Any]:
