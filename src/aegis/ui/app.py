@@ -16,6 +16,8 @@ for _mod_name in (
     "aegis.integrations.github_client",
     "aegis.integrations.github_comments",
     "aegis.integrations.jira_client",
+    "aegis.integrations.jenkins_client",
+    "aegis.integrations.teams_client",
     "aegis.ui.mcp_panel",
 ):
     if _mod_name in sys.modules:
@@ -183,6 +185,8 @@ st.markdown(
                     color:#06121f; flex-shrink:0; }
       .conn-glyph.gh { background: linear-gradient(135deg,#e8eefc,#a78bfa); }
       .conn-glyph.jira { background: linear-gradient(135deg,#22d3ee,#60a5fa); }
+      .conn-glyph.jenkins { background: linear-gradient(135deg,#f8d7da,#f59e0b); }
+      .conn-glyph.teams { background: linear-gradient(135deg,#b3d4fc,#5b8def); }
       .conn-name { font-weight:700; font-size:16px; }
       .conn-via { color: var(--muted); font-size:12px; margin-top:1px; }
       .conn-pill { margin-left:auto; border-radius:999px; padding:4px 12px; font-size:11px;

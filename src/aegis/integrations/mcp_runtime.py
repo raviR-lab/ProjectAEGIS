@@ -22,6 +22,8 @@ log = logging.getLogger(__name__)
 
 GITHUB_MCP_PACKAGE = "@modelcontextprotocol/server-github@2025.4.8"
 JIRA_MCP_PACKAGE = "@aashari/mcp-server-atlassian-jira@3.3.0"
+JENKINS_MCP_PACKAGE = "@kud/mcp-jenkins@2.2.0"
+TEAMS_MCP_PACKAGE = "@floriscornel/teams-mcp@0.9.0"
 
 DEFAULT_TIMEOUT = 45.0
 
@@ -48,6 +50,10 @@ ALLOWED_SPAWN_ENV = frozenset(
         "ATLASSIAN_SITE_NAME",
         "ATLASSIAN_USER_EMAIL",
         "ATLASSIAN_API_TOKEN",
+        "MCP_JENKINS_URL",
+        "MCP_JENKINS_USER",
+        "MCP_JENKINS_API_TOKEN",
+        "TEAMS_MCP_READ_ONLY",
     }
 )
 
@@ -55,6 +61,8 @@ ALLOWED_SPAWN_ENV = frozenset(
 RATE_LIMITS: dict[str, tuple[float, float]] = {
     "github": (30.0, 1.0),  # 30 calls / min, refill 1/s
     "jira": (30.0, 1.0),
+    "jenkins": (20.0, 1.0),
+    "teams": (20.0, 1.0),
 }
 
 
@@ -299,6 +307,27 @@ def jira_mcp_command() -> tuple[str, list[str], dict[str, str], str]:
     return cmd, args, env, package
 
 
+def jenkins_mcp_command() -> tuple[str, list[str], dict[str, str], str]:
+    cmd, args, package = _stdio_launch(
+        "MCP_JENKINS_COMMAND", "MCP_JENKINS_PACKAGE", "MCP_JENKINS_ARGS", JENKINS_MCP_PACKAGE
+    )
+    env = {
+        "MCP_JENKINS_URL": config.setting("JENKINS_URL"),
+        "MCP_JENKINS_USER": config.setting("JENKINS_USER"),
+        "MCP_JENKINS_API_TOKEN": config.setting("JENKINS_API_TOKEN"),
+    }
+    return cmd, args, env, package
+
+
+def teams_mcp_command() -> tuple[str, list[str], dict[str, str], str]:
+    cmd, args, package = _stdio_launch(
+        "MCP_TEAMS_COMMAND", "MCP_TEAMS_PACKAGE", "MCP_TEAMS_ARGS", TEAMS_MCP_PACKAGE
+    )
+    read_only = config.setting("TEAMS_MCP_READ_ONLY", "true") or "true"
+    env = {"TEAMS_MCP_READ_ONLY": read_only}
+    return cmd, args, env, package
+
+
 def _mask_secret(value: str) -> str:
     if not value:
         return "not set"
@@ -363,6 +392,42 @@ def jira_mcp_details() -> dict[str, Any]:
     )
 
 
+def jenkins_mcp_details() -> dict[str, Any]:
+    """Current Jenkins MCP spawn config for the Infrastructure page (no secrets)."""
+    cmd, args, env, package = jenkins_mcp_command()
+    return _spawn_details(
+        cmd,
+        args,
+        package,
+        env.get("MCP_JENKINS_API_TOKEN") or "",
+        {
+            "kind": "Jenkins",
+            "env_injected": "MCP_JENKINS_URL / USER / API_TOKEN",
+            "base_url": config.setting("JENKINS_URL"),
+            "user": config.setting("JENKINS_USER"),
+            "source": config.setting("JENKINS_SOURCE", "auto") or "auto",
+        },
+    )
+
+
+def teams_mcp_details() -> dict[str, Any]:
+    """Current Teams MCP spawn config for the Infrastructure page (no secrets)."""
+    cmd, args, env, package = teams_mcp_command()
+    return _spawn_details(
+        cmd,
+        args,
+        package,
+        "",
+        {
+            "kind": "Microsoft Teams",
+            "env_injected": "TEAMS_MCP_READ_ONLY",
+            "read_only": env.get("TEAMS_MCP_READ_ONLY") or "true",
+            "auth": "npx @floriscornel/teams-mcp authenticate",
+            "source": config.setting("TEAMS_SOURCE", "auto") or "auto",
+        },
+    )
+
+
 def call_github_tool(tool: str, arguments: dict[str, Any] | None = None) -> Any:
     cmd, args, env, _package = github_mcp_command()
     if not env.get("GITHUB_PERSONAL_ACCESS_TOKEN"):
@@ -383,6 +448,30 @@ def call_jira_tool(tool: str, arguments: dict[str, Any] | None = None) -> Any:
         raise McpError("Jira MCP needs JIRA_BASE_URL (site name) in .env")
     return run_ratelimited(
         "jira",
+        lambda: call_mcp_tool(command=cmd, args=args, env=env, tool=tool, arguments=arguments),
+        tool=tool,
+        arguments=arguments,
+    )
+
+
+def call_jenkins_tool(tool: str, arguments: dict[str, Any] | None = None) -> Any:
+    cmd, args, env, _package = jenkins_mcp_command()
+    if not env.get("MCP_JENKINS_URL"):
+        raise McpError("Jenkins MCP needs JENKINS_URL in .env")
+    if not env.get("MCP_JENKINS_API_TOKEN"):
+        raise McpError("Jenkins MCP needs JENKINS_API_TOKEN in .env")
+    return run_ratelimited(
+        "jenkins",
+        lambda: call_mcp_tool(command=cmd, args=args, env=env, tool=tool, arguments=arguments),
+        tool=tool,
+        arguments=arguments,
+    )
+
+
+def call_teams_tool(tool: str, arguments: dict[str, Any] | None = None) -> Any:
+    cmd, args, env, _package = teams_mcp_command()
+    return run_ratelimited(
+        "teams",
         lambda: call_mcp_tool(command=cmd, args=args, env=env, tool=tool, arguments=arguments),
         tool=tool,
         arguments=arguments,

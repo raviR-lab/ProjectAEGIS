@@ -60,6 +60,22 @@ MCP_JIRA_PACKAGE = env(
 )
 MCP_JIRA_ARGS = env("MCP_JIRA_ARGS")
 
+# Jenkins via MCP (spawned with npx; creds injected into the server process).
+JENKINS_URL = env("JENKINS_URL")
+JENKINS_USER = env("JENKINS_USER")
+JENKINS_API_TOKEN = env("JENKINS_API_TOKEN")
+JENKINS_SOURCE = (env("JENKINS_SOURCE", "auto") or "auto").strip().lower()
+MCP_JENKINS_COMMAND = env("MCP_JENKINS_COMMAND", "npx")
+MCP_JENKINS_PACKAGE = env("MCP_JENKINS_PACKAGE", "@kud/mcp-jenkins@2.2.0")
+MCP_JENKINS_ARGS = env("MCP_JENKINS_ARGS")
+
+# Microsoft Teams via MCP (OAuth-login server; read-only by default).
+TEAMS_SOURCE = (env("TEAMS_SOURCE", "auto") or "auto").strip().lower()
+TEAMS_MCP_READ_ONLY = env("TEAMS_MCP_READ_ONLY", "true")
+MCP_TEAMS_COMMAND = env("MCP_TEAMS_COMMAND", "npx")
+MCP_TEAMS_PACKAGE = env("MCP_TEAMS_PACKAGE", "@floriscornel/teams-mcp@0.9.0")
+MCP_TEAMS_ARGS = env("MCP_TEAMS_ARGS")
+
 # Keys the Infrastructure page can edit and persist to .env
 MCP_CONFIG_KEYS = (
     "GITHUB_SOURCE",
@@ -79,9 +95,28 @@ MCP_CONFIG_KEYS = (
     "MCP_JIRA_COMMAND",
     "MCP_JIRA_PACKAGE",
     "MCP_JIRA_ARGS",
+    "JENKINS_URL",
+    "JENKINS_USER",
+    "JENKINS_API_TOKEN",
+    "JENKINS_SOURCE",
+    "MCP_JENKINS_COMMAND",
+    "MCP_JENKINS_PACKAGE",
+    "MCP_JENKINS_ARGS",
+    "TEAMS_SOURCE",
+    "TEAMS_MCP_READ_ONLY",
+    "MCP_TEAMS_COMMAND",
+    "MCP_TEAMS_PACKAGE",
+    "MCP_TEAMS_ARGS",
 )
 
-SECRET_KEYS = frozenset({"GITHUB_TOKEN", "JIRA_API_TOKEN", "NEO4J_PASSWORD"})
+SECRET_KEYS = frozenset(
+    {
+        "GITHUB_TOKEN",
+        "JIRA_API_TOKEN",
+        "NEO4J_PASSWORD",
+        "JENKINS_API_TOKEN",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +146,16 @@ def jira_token_quality(token: str) -> tuple[str, str]:
         return "invalid", "Token is empty."
     if len(token) < 12:
         return "invalid", "Jira API token looks too short."
+    return "ok", "OK"
+
+
+def jenkins_token_quality(token: str) -> tuple[str, str]:
+    """Jenkins API tokens are opaque; flag suspiciously short values."""
+    token = (token or "").strip()
+    if not token:
+        return "invalid", "Token is empty."
+    if len(token) < 8:
+        return "invalid", "Jenkins API token looks too short."
     return "ok", "OK"
 
 

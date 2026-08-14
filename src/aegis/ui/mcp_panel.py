@@ -11,15 +11,27 @@ from aegis.integrations.github_client import (
     connection_status as github_connection_status,
     github_configured,
 )
+from aegis.integrations.jenkins_client import (
+    connection_status as jenkins_connection_status,
+    jenkins_configured,
+)
 from aegis.integrations.jira_client import (
     connection_status as jira_connection_status,
     jira_configured,
 )
 from aegis.integrations.mcp_runtime import (
     GITHUB_MCP_PACKAGE,
+    JENKINS_MCP_PACKAGE,
     JIRA_MCP_PACKAGE,
+    TEAMS_MCP_PACKAGE,
     github_mcp_details,
+    jenkins_mcp_details,
     jira_mcp_details,
+    teams_mcp_details,
+)
+from aegis.integrations.teams_client import (
+    connection_status as teams_connection_status,
+    teams_configured,
 )
 
 
@@ -122,16 +134,22 @@ def render_mcp_panel() -> None:
         )
     gh_details = github_mcp_details()
     jira_details = jira_mcp_details()
+    jenkins_details = jenkins_mcp_details()
+    teams_details = teams_mcp_details()
     gh_status = st.session_state.get("github_mcp_status")
     jira_status = st.session_state.get("jira_mcp_status")
+    jenkins_status = st.session_state.get("jenkins_mcp_status")
+    teams_status = st.session_state.get("teams_mcp_status")
     gh_var, gh_pill = mcp_probe_state(gh_status, github_configured())
     jira_var, jira_pill = mcp_probe_state(jira_status, jira_configured())
+    jenkins_var, jenkins_pill = mcp_probe_state(jenkins_status, jenkins_configured())
+    teams_var, teams_pill = mcp_probe_state(teams_status, teams_configured())
 
     st.markdown('<div class="kicker">Integrations · MCP</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="section-title">GitHub &amp; Jira connections</div>'
+        '<div class="section-title">GitHub · Jira · Jenkins · Teams connections</div>'
         '<div style="color:var(--muted);font-size:13.5px;margin:-4px 0 14px">'
-        "AEGIS talks to GitHub and Jira only through MCP. Credentials stay in "
+        "AEGIS talks to external systems only through MCP. Credentials stay in "
         "<code>.env</code> and are injected into the server process — never into REST clients. "
         "Graph analysis still works if a connection is off.</div>",
         unsafe_allow_html=True,
@@ -227,6 +245,87 @@ def render_mcp_panel() -> None:
                         },
                     )
 
+        st.markdown(
+            conn_card_html(
+                kind="Jenkins",
+                glyph="JN",
+                glyph_class="jenkins",
+                headline=_headline(
+                    jenkins_status,
+                    live=[(jenkins_status or {}).get("base_url") or ""],
+                    fallback=[jenkins_details.get("base_url") or ""],
+                    placeholder="Connect a Jenkins server",
+                ),
+                facts=[
+                    ("Token", jenkins_details.get("token") or "not set"),
+                    ("Source", jenkins_details.get("source") or "auto"),
+                    ("User", jenkins_details.get("user") or "not set"),
+                    ("Package", jenkins_details.get("package") or "—"),
+                ],
+                spawn=jenkins_details.get("spawn") or "",
+                variant=jenkins_var,
+                pill=jenkins_pill,
+                error=_probe_error(jenkins_status),
+            ),
+            unsafe_allow_html=True,
+        )
+        if st.button(
+            "Test Jenkins connection",
+            disabled=not jenkins_configured(),
+            width="stretch",
+            help="Spawns the Jenkins MCP server and lists jobs.",
+        ):
+            with st.spinner("Talking to Jenkins MCP…"):
+                st.session_state.jenkins_mcp_status = jenkins_connection_status()
+            st.rerun()
+        jenkins_opts = ["auto", "mcp", "off"]
+        with st.expander("Edit Jenkins connection", expanded=not jenkins_configured()):
+            with st.form("jenkins_mcp_config"):
+                jenkins_url = st.text_input(
+                    "Jenkins URL",
+                    value=_cfg("JENKINS_URL"),
+                    placeholder="https://jenkins.example.com",
+                )
+                jk1, jk2 = st.columns(2)
+                with jk1:
+                    jenkins_user = st.text_input("Username", value=_cfg("JENKINS_USER"))
+                with jk2:
+                    jenkins_source = st.selectbox(
+                        "When to use MCP",
+                        jenkins_opts,
+                        index=_option_index(_cfg("JENKINS_SOURCE", "auto"), jenkins_opts),
+                    )
+                jenkins_token = st.text_input(
+                    "API token",
+                    type="password",
+                    value="",
+                    placeholder="••••  leave blank to keep current",
+                )
+                jk_cmd, jk_pkg, jk_args = _advanced_server_fields(
+                    "jenkins",
+                    "MCP_JENKINS_COMMAND",
+                    "MCP_JENKINS_PACKAGE",
+                    "MCP_JENKINS_ARGS",
+                    JENKINS_MCP_PACKAGE,
+                )
+                if st.form_submit_button("Save Jenkins", type="primary"):
+                    if jenkins_token:
+                        jk_level, _jk_hint = config.jenkins_token_quality(jenkins_token)
+                        if jk_level == "invalid":
+                            st.error("That Jenkins API token looks invalid. Double-check it.")
+                    _save(
+                        "jenkins_mcp_status",
+                        {
+                            "JENKINS_URL": jenkins_url,
+                            "JENKINS_USER": jenkins_user,
+                            "JENKINS_SOURCE": jenkins_source,
+                            "MCP_JENKINS_COMMAND": jk_cmd,
+                            "MCP_JENKINS_PACKAGE": jk_pkg,
+                            "MCP_JENKINS_ARGS": jk_args,
+                            "JENKINS_API_TOKEN": jenkins_token,
+                        },
+                    )
+
     with mcp_r:
         st.markdown(
             conn_card_html(
@@ -319,5 +418,75 @@ def render_mcp_panel() -> None:
                             "MCP_JIRA_PACKAGE": jira_pkg,
                             "MCP_JIRA_ARGS": jira_args,
                             "JIRA_API_TOKEN": jira_token,
+                        },
+                    )
+
+        st.markdown(
+            conn_card_html(
+                kind="Microsoft Teams",
+                glyph="TM",
+                glyph_class="teams",
+                headline=_headline(
+                    teams_status,
+                    live=[(teams_status or {}).get("display_name") or ""],
+                    fallback=[],
+                    placeholder="Authenticate Microsoft Teams",
+                ),
+                facts=[
+                    ("Read-only", teams_details.get("read_only") or "true"),
+                    ("Source", teams_details.get("source") or "auto"),
+                    ("Auth", teams_details.get("auth") or "—"),
+                    ("Package", teams_details.get("package") or "—"),
+                ],
+                spawn=teams_details.get("spawn") or "",
+                variant=teams_var,
+                pill=teams_pill,
+                error=_probe_error(teams_status),
+            ),
+            unsafe_allow_html=True,
+        )
+        if st.button(
+            "Test Teams connection",
+            disabled=not teams_configured(),
+            width="stretch",
+            help="Checks the Teams MCP auth status.",
+        ):
+            with st.spinner("Talking to Teams MCP…"):
+                st.session_state.teams_mcp_status = teams_connection_status()
+            st.rerun()
+        teams_opts = ["read-only", "read-write"]
+        with st.expander("Edit Teams connection", expanded=True):
+            with st.form("teams_mcp_config"):
+                teams_mode = st.selectbox(
+                    "Access mode",
+                    teams_opts,
+                    index=(
+                        0
+                        if _cfg("TEAMS_MCP_READ_ONLY", "true") == "true"
+                        else 1
+                    ),
+                )
+                st.caption(
+                    "Teams uses interactive OAuth. Run once from the server: "
+                    "`npx @floriscornel/teams-mcp authenticate`"
+                )
+                tm_cmd, tm_pkg, tm_args = _advanced_server_fields(
+                    "teams",
+                    "MCP_TEAMS_COMMAND",
+                    "MCP_TEAMS_PACKAGE",
+                    "MCP_TEAMS_ARGS",
+                    TEAMS_MCP_PACKAGE,
+                )
+                if st.form_submit_button("Save Teams", type="primary"):
+                    _save(
+                        "teams_mcp_status",
+                        {
+                            "TEAMS_SOURCE": "auto",
+                            "TEAMS_MCP_READ_ONLY": (
+                                "true" if teams_mode == "read-only" else "false"
+                            ),
+                            "MCP_TEAMS_COMMAND": tm_cmd,
+                            "MCP_TEAMS_PACKAGE": tm_pkg,
+                            "MCP_TEAMS_ARGS": tm_args,
                         },
                     )
