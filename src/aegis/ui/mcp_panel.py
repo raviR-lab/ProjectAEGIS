@@ -125,8 +125,347 @@ def _advanced_server_fields(prefix: str, command_key: str, package_key: str, arg
     return cmd, pkg, args
 
 
+def _render_github_block(gh_details: dict, gh_status: dict | None, gh_var: str, gh_pill: str) -> None:
+    st.markdown(
+        conn_card_html(
+            kind="GitHub",
+            glyph="GH",
+            glyph_class="gh",
+            headline=_headline(
+                gh_status,
+                live=[(gh_status or {}).get("full_name") or ""],
+                fallback=[gh_details.get("full_name") or ""],
+                placeholder="Connect a GitHub repo",
+            ),
+            facts=[
+                ("Token", gh_details.get("token") or "not set"),
+                ("Source", gh_details.get("source") or "auto"),
+                ("PR map", gh_details.get("pr_map") or "none"),
+                ("Package", gh_details.get("package") or "—"),
+            ],
+            spawn=gh_details.get("spawn") or "",
+            variant=gh_var,
+            pill=gh_pill,
+            error=_probe_error(gh_status),
+        ),
+        unsafe_allow_html=True,
+    )
+    if st.button(
+        "Test GitHub connection",
+        disabled=not github_configured(),
+        width="stretch",
+        help="Spawns the GitHub MCP server with your token and probes the repo.",
+    ):
+        with st.spinner("Talking to GitHub MCP…"):
+            st.session_state.github_mcp_status = github_connection_status()
+        st.rerun()
+    with st.expander("Edit GitHub connection", expanded=not github_configured()):
+        with st.form("github_mcp_config"):
+            g1, g2 = st.columns(2)
+            with g1:
+                gh_owner = st.text_input("Owner", value=_cfg("GITHUB_REPO_OWNER"))
+            with g2:
+                gh_repo = st.text_input("Repository", value=_cfg("GITHUB_REPO_NAME"))
+            gh_map = st.text_input(
+                "CIG → GitHub PR map",
+                value=_cfg("GITHUB_PR_MAP"),
+                placeholder="482:1, 500:2",
+            )
+            gh_opts = ["auto", "mcp", "fixture"]
+            gh_source = st.selectbox(
+                "When to use MCP",
+                gh_opts,
+                index=_option_index(_cfg("GITHUB_SOURCE", "auto"), gh_opts),
+            )
+            gh_token = st.text_input(
+                "Personal access token",
+                type="password",
+                value="",
+                placeholder="••••  leave blank to keep current",
+            )
+            gh_cmd, gh_pkg, gh_args = _advanced_server_fields(
+                "gh",
+                "MCP_GITHUB_COMMAND",
+                "MCP_GITHUB_PACKAGE",
+                "MCP_GITHUB_ARGS",
+                GITHUB_MCP_PACKAGE,
+            )
+            if st.form_submit_button("Save GitHub", type="primary"):
+                if gh_token:
+                    gh_level, gh_hint = config.github_token_quality(gh_token)
+                    if gh_level == "classic":
+                        st.warning(
+                            "Classic PAT detected — consider a fine-grained token "
+                            "scoped to Contents/Metadata/Pull requests/Issues."
+                        )
+                    elif gh_level == "invalid":
+                        st.error("That GitHub token looks invalid. Double-check it.")
+                _save(
+                    "github_mcp_status",
+                    {
+                        "GITHUB_REPO_OWNER": gh_owner,
+                        "GITHUB_REPO_NAME": gh_repo,
+                        "GITHUB_SOURCE": gh_source,
+                        "GITHUB_PR_MAP": gh_map,
+                        "MCP_GITHUB_COMMAND": gh_cmd,
+                        "MCP_GITHUB_PACKAGE": gh_pkg,
+                        "MCP_GITHUB_ARGS": gh_args,
+                        "GITHUB_TOKEN": gh_token,
+                    },
+                )
+
+
+def _render_jira_block(jira_details: dict, jira_status: dict | None, jira_var: str, jira_pill: str) -> None:
+    st.markdown(
+        conn_card_html(
+            kind="Jira",
+            glyph="JI",
+            glyph_class="jira",
+            headline=_headline(
+                jira_status,
+                live=[
+                    (jira_status or {}).get("project_name") or "",
+                    (jira_status or {}).get("site") or "",
+                ],
+                fallback=[
+                    jira_details.get("base_url") or "",
+                    jira_details.get("site") or "",
+                ],
+                placeholder="Connect a Jira site",
+            ),
+            facts=[
+                ("Token", jira_details.get("token") or "not set"),
+                ("Source", jira_details.get("source") or "local"),
+                ("Project", jira_details.get("project_key") or "—"),
+                ("Email", jira_details.get("email") or "not set"),
+            ],
+            spawn=jira_details.get("spawn") or "",
+            variant=jira_var,
+            pill=jira_pill,
+            error=_probe_error(jira_status),
+        ),
+        unsafe_allow_html=True,
+    )
+    if st.button(
+        "Test Jira connection",
+        disabled=not jira_configured(),
+        width="stretch",
+        help="Spawns the Jira MCP server and checks the site + project.",
+    ):
+        with st.spinner("Talking to Jira MCP…"):
+            st.session_state.jira_mcp_status = jira_connection_status()
+        st.rerun()
+    jira_opts = ["mcp", "cloud", "local"]
+    with st.expander("Edit Jira connection", expanded=not jira_configured()):
+        with st.form("jira_mcp_config"):
+            jira_url = st.text_input(
+                "Site URL",
+                value=_cfg("JIRA_BASE_URL"),
+                placeholder="https://your-site.atlassian.net",
+            )
+            j1, j2 = st.columns(2)
+            with j1:
+                jira_email = st.text_input("Email", value=_cfg("JIRA_EMAIL"))
+            with j2:
+                jira_key = st.text_input("Project key", value=_cfg("JIRA_PROJECT_KEY", "AEG") or "AEG")
+            jira_name = st.text_input(
+                "Project name",
+                value=_cfg("JIRA_PROJECT_NAME", "Project AEGIS") or "Project AEGIS",
+            )
+            jira_source = st.selectbox(
+                "When to use MCP",
+                jira_opts,
+                index=_option_index(_cfg("JIRA_SOURCE", "local"), jira_opts, fallback=2),
+            )
+            jira_token = st.text_input(
+                "API token",
+                type="password",
+                value="",
+                placeholder="••••  leave blank to keep current",
+            )
+            jira_cmd, jira_pkg, jira_args = _advanced_server_fields(
+                "jira",
+                "MCP_JIRA_COMMAND",
+                "MCP_JIRA_PACKAGE",
+                "MCP_JIRA_ARGS",
+                JIRA_MCP_PACKAGE,
+            )
+            if st.form_submit_button("Save Jira", type="primary"):
+                if jira_token:
+                    jira_level, _jhint = config.jira_token_quality(jira_token)
+                    if jira_level == "invalid":
+                        st.error("That Jira API token looks invalid. Double-check it.")
+                _save(
+                    "jira_mcp_status",
+                    {
+                        "JIRA_BASE_URL": jira_url,
+                        "JIRA_EMAIL": jira_email,
+                        "JIRA_PROJECT_KEY": jira_key,
+                        "JIRA_PROJECT_NAME": jira_name,
+                        "JIRA_SOURCE": jira_source,
+                        "MCP_JIRA_COMMAND": jira_cmd,
+                        "MCP_JIRA_PACKAGE": jira_pkg,
+                        "MCP_JIRA_ARGS": jira_args,
+                        "JIRA_API_TOKEN": jira_token,
+                    },
+                )
+
+
+def _render_jenkins_block(
+    jenkins_details: dict, jenkins_status: dict | None, jenkins_var: str, jenkins_pill: str
+) -> None:
+    st.markdown(
+        conn_card_html(
+            kind="Jenkins",
+            glyph="JN",
+            glyph_class="jenkins",
+            headline=_headline(
+                jenkins_status,
+                live=[(jenkins_status or {}).get("base_url") or ""],
+                fallback=[jenkins_details.get("base_url") or ""],
+                placeholder="Connect a Jenkins server",
+            ),
+            facts=[
+                ("Token", jenkins_details.get("token") or "not set"),
+                ("Source", jenkins_details.get("source") or "auto"),
+                ("User", jenkins_details.get("user") or "not set"),
+                ("Package", jenkins_details.get("package") or "—"),
+            ],
+            spawn=jenkins_details.get("spawn") or "",
+            variant=jenkins_var,
+            pill=jenkins_pill,
+            error=_probe_error(jenkins_status),
+        ),
+        unsafe_allow_html=True,
+    )
+    if st.button(
+        "Test Jenkins connection",
+        disabled=not jenkins_configured(),
+        width="stretch",
+        help="Spawns the Jenkins MCP server and lists jobs.",
+    ):
+        with st.spinner("Talking to Jenkins MCP…"):
+            st.session_state.jenkins_mcp_status = jenkins_connection_status()
+        st.rerun()
+    jenkins_opts = ["auto", "mcp", "off"]
+    with st.expander("Edit Jenkins connection", expanded=not jenkins_configured()):
+        with st.form("jenkins_mcp_config"):
+            jenkins_url = st.text_input(
+                "Jenkins URL",
+                value=_cfg("JENKINS_URL"),
+                placeholder="https://jenkins.example.com",
+            )
+            jk1, jk2 = st.columns(2)
+            with jk1:
+                jenkins_user = st.text_input("Username", value=_cfg("JENKINS_USER"))
+            with jk2:
+                jenkins_source = st.selectbox(
+                    "When to use MCP",
+                    jenkins_opts,
+                    index=_option_index(_cfg("JENKINS_SOURCE", "auto"), jenkins_opts),
+                )
+            jenkins_token = st.text_input(
+                "API token",
+                type="password",
+                value="",
+                placeholder="••••  leave blank to keep current",
+            )
+            jk_cmd, jk_pkg, jk_args = _advanced_server_fields(
+                "jenkins",
+                "MCP_JENKINS_COMMAND",
+                "MCP_JENKINS_PACKAGE",
+                "MCP_JENKINS_ARGS",
+                JENKINS_MCP_PACKAGE,
+            )
+            if st.form_submit_button("Save Jenkins", type="primary"):
+                if jenkins_token:
+                    jk_level, _jk_hint = config.jenkins_token_quality(jenkins_token)
+                    if jk_level == "invalid":
+                        st.error("That Jenkins API token looks invalid. Double-check it.")
+                _save(
+                    "jenkins_mcp_status",
+                    {
+                        "JENKINS_URL": jenkins_url,
+                        "JENKINS_USER": jenkins_user,
+                        "JENKINS_SOURCE": jenkins_source,
+                        "MCP_JENKINS_COMMAND": jk_cmd,
+                        "MCP_JENKINS_PACKAGE": jk_pkg,
+                        "MCP_JENKINS_ARGS": jk_args,
+                        "JENKINS_API_TOKEN": jenkins_token,
+                    },
+                )
+
+
+def _render_teams_block(
+    teams_details: dict, teams_status: dict | None, teams_var: str, teams_pill: str
+) -> None:
+    st.markdown(
+        conn_card_html(
+            kind="Microsoft Teams",
+            glyph="TM",
+            glyph_class="teams",
+            headline=_headline(
+                teams_status,
+                live=[(teams_status or {}).get("display_name") or ""],
+                fallback=[],
+                placeholder="Authenticate Microsoft Teams",
+            ),
+            facts=[
+                ("Read-only", teams_details.get("read_only") or "true"),
+                ("Source", teams_details.get("source") or "auto"),
+                ("Auth", teams_details.get("auth") or "—"),
+                ("Package", teams_details.get("package") or "—"),
+            ],
+            spawn=teams_details.get("spawn") or "",
+            variant=teams_var,
+            pill=teams_pill,
+            error=_probe_error(teams_status),
+        ),
+        unsafe_allow_html=True,
+    )
+    if st.button(
+        "Test Teams connection",
+        disabled=not teams_configured(),
+        width="stretch",
+        help="Checks the Teams MCP auth status.",
+    ):
+        with st.spinner("Talking to Teams MCP…"):
+            st.session_state.teams_mcp_status = teams_connection_status()
+        st.rerun()
+    teams_opts = ["read-only", "read-write"]
+    with st.expander("Edit Teams connection", expanded=True):
+        with st.form("teams_mcp_config"):
+            teams_mode = st.selectbox(
+                "Access mode",
+                teams_opts,
+                index=0 if _cfg("TEAMS_MCP_READ_ONLY", "true") == "true" else 1,
+            )
+            st.caption(
+                "Teams uses interactive OAuth. Run once from the server: "
+                "`npx @floriscornel/teams-mcp authenticate`"
+            )
+            tm_cmd, tm_pkg, tm_args = _advanced_server_fields(
+                "teams",
+                "MCP_TEAMS_COMMAND",
+                "MCP_TEAMS_PACKAGE",
+                "MCP_TEAMS_ARGS",
+                TEAMS_MCP_PACKAGE,
+            )
+            if st.form_submit_button("Save Teams", type="primary"):
+                _save(
+                    "teams_mcp_status",
+                    {
+                        "TEAMS_SOURCE": "auto",
+                        "TEAMS_MCP_READ_ONLY": "true" if teams_mode == "read-only" else "false",
+                        "MCP_TEAMS_COMMAND": tm_cmd,
+                        "MCP_TEAMS_PACKAGE": tm_pkg,
+                        "MCP_TEAMS_ARGS": tm_args,
+                    },
+                )
+
+
 def render_mcp_panel() -> None:
-    """Full-width GitHub + Jira MCP cards, test actions, and editors."""
+    """2×2 grid of MCP connection cards with test actions and editors."""
     if (config.setting("NEO4J_PASSWORD") or "").strip() in {"", "changeme"}:
         st.warning(
             "Neo4j is using the default password. Set NEO4J_PASSWORD in .env "
@@ -155,338 +494,14 @@ def render_mcp_panel() -> None:
         unsafe_allow_html=True,
     )
 
-    mcp_l, mcp_r = st.columns(2, gap="large")
-    with mcp_l:
-        st.markdown(
-            conn_card_html(
-                kind="GitHub",
-                glyph="GH",
-                glyph_class="gh",
-                headline=_headline(
-                    gh_status,
-                    live=[(gh_status or {}).get("full_name") or ""],
-                    fallback=[gh_details.get("full_name") or ""],
-                    placeholder="Connect a GitHub repo",
-                ),
-                facts=[
-                    ("Token", gh_details.get("token") or "not set"),
-                    ("Source", gh_details.get("source") or "auto"),
-                    ("PR map", gh_details.get("pr_map") or "none"),
-                    ("Package", gh_details.get("package") or "—"),
-                ],
-                spawn=gh_details.get("spawn") or "",
-                variant=gh_var,
-                pill=gh_pill,
-                error=_probe_error(gh_status),
-            ),
-            unsafe_allow_html=True,
-        )
-        if st.button(
-            "Test GitHub connection",
-            disabled=not github_configured(),
-            width="stretch",
-            help="Spawns the GitHub MCP server with your token and probes the repo.",
-        ):
-            with st.spinner("Talking to GitHub MCP…"):
-                st.session_state.github_mcp_status = github_connection_status()
-            st.rerun()
-        with st.expander("Edit GitHub connection", expanded=not github_configured()):
-            with st.form("github_mcp_config"):
-                g1, g2 = st.columns(2)
-                with g1:
-                    gh_owner = st.text_input("Owner", value=_cfg("GITHUB_REPO_OWNER"))
-                with g2:
-                    gh_repo = st.text_input("Repository", value=_cfg("GITHUB_REPO_NAME"))
-                gh_map = st.text_input(
-                    "CIG → GitHub PR map",
-                    value=_cfg("GITHUB_PR_MAP"),
-                    placeholder="482:1, 500:2",
-                )
-                gh_opts = ["auto", "mcp", "fixture"]
-                gh_source = st.selectbox(
-                    "When to use MCP",
-                    gh_opts,
-                    index=_option_index(_cfg("GITHUB_SOURCE", "auto"), gh_opts),
-                )
-                gh_token = st.text_input(
-                    "Personal access token",
-                    type="password",
-                    value="",
-                    placeholder="••••  leave blank to keep current",
-                )
-                gh_cmd, gh_pkg, gh_args = _advanced_server_fields(
-                    "gh",
-                    "MCP_GITHUB_COMMAND",
-                    "MCP_GITHUB_PACKAGE",
-                    "MCP_GITHUB_ARGS",
-                    GITHUB_MCP_PACKAGE,
-                )
-                if st.form_submit_button("Save GitHub", type="primary"):
-                    if gh_token:
-                        gh_level, gh_hint = config.github_token_quality(gh_token)
-                        if gh_level == "classic":
-                            st.warning(
-                                "Classic PAT detected — consider a fine-grained token "
-                                "scoped to Contents/Metadata/Pull requests/Issues."
-                            )
-                        elif gh_level == "invalid":
-                            st.error("That GitHub token looks invalid. Double-check it.")
-                    _save(
-                        "github_mcp_status",
-                        {
-                            "GITHUB_REPO_OWNER": gh_owner,
-                            "GITHUB_REPO_NAME": gh_repo,
-                            "GITHUB_SOURCE": gh_source,
-                            "GITHUB_PR_MAP": gh_map,
-                            "MCP_GITHUB_COMMAND": gh_cmd,
-                            "MCP_GITHUB_PACKAGE": gh_pkg,
-                            "MCP_GITHUB_ARGS": gh_args,
-                            "GITHUB_TOKEN": gh_token,
-                        },
-                    )
+    top_l, top_r = st.columns(2, gap="large")
+    with top_l:
+        _render_github_block(gh_details, gh_status, gh_var, gh_pill)
+    with top_r:
+        _render_jira_block(jira_details, jira_status, jira_var, jira_pill)
 
-        st.markdown(
-            conn_card_html(
-                kind="Jenkins",
-                glyph="JN",
-                glyph_class="jenkins",
-                headline=_headline(
-                    jenkins_status,
-                    live=[(jenkins_status or {}).get("base_url") or ""],
-                    fallback=[jenkins_details.get("base_url") or ""],
-                    placeholder="Connect a Jenkins server",
-                ),
-                facts=[
-                    ("Token", jenkins_details.get("token") or "not set"),
-                    ("Source", jenkins_details.get("source") or "auto"),
-                    ("User", jenkins_details.get("user") or "not set"),
-                    ("Package", jenkins_details.get("package") or "—"),
-                ],
-                spawn=jenkins_details.get("spawn") or "",
-                variant=jenkins_var,
-                pill=jenkins_pill,
-                error=_probe_error(jenkins_status),
-            ),
-            unsafe_allow_html=True,
-        )
-        if st.button(
-            "Test Jenkins connection",
-            disabled=not jenkins_configured(),
-            width="stretch",
-            help="Spawns the Jenkins MCP server and lists jobs.",
-        ):
-            with st.spinner("Talking to Jenkins MCP…"):
-                st.session_state.jenkins_mcp_status = jenkins_connection_status()
-            st.rerun()
-        jenkins_opts = ["auto", "mcp", "off"]
-        with st.expander("Edit Jenkins connection", expanded=not jenkins_configured()):
-            with st.form("jenkins_mcp_config"):
-                jenkins_url = st.text_input(
-                    "Jenkins URL",
-                    value=_cfg("JENKINS_URL"),
-                    placeholder="https://jenkins.example.com",
-                )
-                jk1, jk2 = st.columns(2)
-                with jk1:
-                    jenkins_user = st.text_input("Username", value=_cfg("JENKINS_USER"))
-                with jk2:
-                    jenkins_source = st.selectbox(
-                        "When to use MCP",
-                        jenkins_opts,
-                        index=_option_index(_cfg("JENKINS_SOURCE", "auto"), jenkins_opts),
-                    )
-                jenkins_token = st.text_input(
-                    "API token",
-                    type="password",
-                    value="",
-                    placeholder="••••  leave blank to keep current",
-                )
-                jk_cmd, jk_pkg, jk_args = _advanced_server_fields(
-                    "jenkins",
-                    "MCP_JENKINS_COMMAND",
-                    "MCP_JENKINS_PACKAGE",
-                    "MCP_JENKINS_ARGS",
-                    JENKINS_MCP_PACKAGE,
-                )
-                if st.form_submit_button("Save Jenkins", type="primary"):
-                    if jenkins_token:
-                        jk_level, _jk_hint = config.jenkins_token_quality(jenkins_token)
-                        if jk_level == "invalid":
-                            st.error("That Jenkins API token looks invalid. Double-check it.")
-                    _save(
-                        "jenkins_mcp_status",
-                        {
-                            "JENKINS_URL": jenkins_url,
-                            "JENKINS_USER": jenkins_user,
-                            "JENKINS_SOURCE": jenkins_source,
-                            "MCP_JENKINS_COMMAND": jk_cmd,
-                            "MCP_JENKINS_PACKAGE": jk_pkg,
-                            "MCP_JENKINS_ARGS": jk_args,
-                            "JENKINS_API_TOKEN": jenkins_token,
-                        },
-                    )
-
-    with mcp_r:
-        st.markdown(
-            conn_card_html(
-                kind="Jira",
-                glyph="JI",
-                glyph_class="jira",
-                headline=_headline(
-                    jira_status,
-                    live=[
-                        (jira_status or {}).get("project_name") or "",
-                        (jira_status or {}).get("site") or "",
-                    ],
-                    fallback=[
-                        jira_details.get("base_url") or "",
-                        jira_details.get("site") or "",
-                    ],
-                    placeholder="Connect a Jira site",
-                ),
-                facts=[
-                    ("Token", jira_details.get("token") or "not set"),
-                    ("Source", jira_details.get("source") or "local"),
-                    ("Project", jira_details.get("project_key") or "—"),
-                    ("Email", jira_details.get("email") or "not set"),
-                ],
-                spawn=jira_details.get("spawn") or "",
-                variant=jira_var,
-                pill=jira_pill,
-                error=_probe_error(jira_status),
-            ),
-            unsafe_allow_html=True,
-        )
-        if st.button(
-            "Test Jira connection",
-            disabled=not jira_configured(),
-            width="stretch",
-            help="Spawns the Jira MCP server and checks the site + project.",
-        ):
-            with st.spinner("Talking to Jira MCP…"):
-                st.session_state.jira_mcp_status = jira_connection_status()
-            st.rerun()
-        jira_opts = ["mcp", "cloud", "local"]
-        with st.expander("Edit Jira connection", expanded=not jira_configured()):
-            with st.form("jira_mcp_config"):
-                jira_url = st.text_input(
-                    "Site URL",
-                    value=_cfg("JIRA_BASE_URL"),
-                    placeholder="https://your-site.atlassian.net",
-                )
-                j1, j2 = st.columns(2)
-                with j1:
-                    jira_email = st.text_input("Email", value=_cfg("JIRA_EMAIL"))
-                with j2:
-                    jira_key = st.text_input("Project key", value=_cfg("JIRA_PROJECT_KEY", "AEG") or "AEG")
-                jira_name = st.text_input(
-                    "Project name",
-                    value=_cfg("JIRA_PROJECT_NAME", "Project AEGIS") or "Project AEGIS",
-                )
-                jira_source = st.selectbox(
-                    "When to use MCP",
-                    jira_opts,
-                    index=_option_index(_cfg("JIRA_SOURCE", "local"), jira_opts, fallback=2),
-                )
-                jira_token = st.text_input(
-                    "API token",
-                    type="password",
-                    value="",
-                    placeholder="••••  leave blank to keep current",
-                )
-                jira_cmd, jira_pkg, jira_args = _advanced_server_fields(
-                    "jira",
-                    "MCP_JIRA_COMMAND",
-                    "MCP_JIRA_PACKAGE",
-                    "MCP_JIRA_ARGS",
-                    JIRA_MCP_PACKAGE,
-                )
-                if st.form_submit_button("Save Jira", type="primary"):
-                    if jira_token:
-                        jira_level, _jhint = config.jira_token_quality(jira_token)
-                        if jira_level == "invalid":
-                            st.error("That Jira API token looks invalid. Double-check it.")
-                    _save(
-                        "jira_mcp_status",
-                        {
-                            "JIRA_BASE_URL": jira_url,
-                            "JIRA_EMAIL": jira_email,
-                            "JIRA_PROJECT_KEY": jira_key,
-                            "JIRA_PROJECT_NAME": jira_name,
-                            "JIRA_SOURCE": jira_source,
-                            "MCP_JIRA_COMMAND": jira_cmd,
-                            "MCP_JIRA_PACKAGE": jira_pkg,
-                            "MCP_JIRA_ARGS": jira_args,
-                            "JIRA_API_TOKEN": jira_token,
-                        },
-                    )
-
-        st.markdown(
-            conn_card_html(
-                kind="Microsoft Teams",
-                glyph="TM",
-                glyph_class="teams",
-                headline=_headline(
-                    teams_status,
-                    live=[(teams_status or {}).get("display_name") or ""],
-                    fallback=[],
-                    placeholder="Authenticate Microsoft Teams",
-                ),
-                facts=[
-                    ("Read-only", teams_details.get("read_only") or "true"),
-                    ("Source", teams_details.get("source") or "auto"),
-                    ("Auth", teams_details.get("auth") or "—"),
-                    ("Package", teams_details.get("package") or "—"),
-                ],
-                spawn=teams_details.get("spawn") or "",
-                variant=teams_var,
-                pill=teams_pill,
-                error=_probe_error(teams_status),
-            ),
-            unsafe_allow_html=True,
-        )
-        if st.button(
-            "Test Teams connection",
-            disabled=not teams_configured(),
-            width="stretch",
-            help="Checks the Teams MCP auth status.",
-        ):
-            with st.spinner("Talking to Teams MCP…"):
-                st.session_state.teams_mcp_status = teams_connection_status()
-            st.rerun()
-        teams_opts = ["read-only", "read-write"]
-        with st.expander("Edit Teams connection", expanded=True):
-            with st.form("teams_mcp_config"):
-                teams_mode = st.selectbox(
-                    "Access mode",
-                    teams_opts,
-                    index=(
-                        0
-                        if _cfg("TEAMS_MCP_READ_ONLY", "true") == "true"
-                        else 1
-                    ),
-                )
-                st.caption(
-                    "Teams uses interactive OAuth. Run once from the server: "
-                    "`npx @floriscornel/teams-mcp authenticate`"
-                )
-                tm_cmd, tm_pkg, tm_args = _advanced_server_fields(
-                    "teams",
-                    "MCP_TEAMS_COMMAND",
-                    "MCP_TEAMS_PACKAGE",
-                    "MCP_TEAMS_ARGS",
-                    TEAMS_MCP_PACKAGE,
-                )
-                if st.form_submit_button("Save Teams", type="primary"):
-                    _save(
-                        "teams_mcp_status",
-                        {
-                            "TEAMS_SOURCE": "auto",
-                            "TEAMS_MCP_READ_ONLY": (
-                                "true" if teams_mode == "read-only" else "false"
-                            ),
-                            "MCP_TEAMS_COMMAND": tm_cmd,
-                            "MCP_TEAMS_PACKAGE": tm_pkg,
-                            "MCP_TEAMS_ARGS": tm_args,
-                        },
-                    )
+    bottom_l, bottom_r = st.columns(2, gap="large")
+    with bottom_l:
+        _render_jenkins_block(jenkins_details, jenkins_status, jenkins_var, jenkins_pill)
+    with bottom_r:
+        _render_teams_block(teams_details, teams_status, teams_var, teams_pill)

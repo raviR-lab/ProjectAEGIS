@@ -172,7 +172,8 @@ st.markdown(
 
       .conn-card { background: var(--panel); border:1px solid var(--border); border-radius:18px;
                    padding: 18px 20px 16px; backdrop-filter: blur(14px); margin-bottom: 12px;
-                   box-shadow: 0 10px 40px rgba(0,0,0,.35); position:relative; overflow:hidden; }
+                   box-shadow: 0 10px 40px rgba(0,0,0,.35); position:relative; overflow:hidden;
+                   min-height: 205px; display:flex; flex-direction:column; }
       .conn-card::before { content:""; position:absolute; inset:0 auto 0 0; width:3px; }
       .conn-card.ok::before { background: var(--green); }
       .conn-card.warn::before { background: var(--amber); }
