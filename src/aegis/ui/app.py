@@ -101,20 +101,29 @@ st.markdown(
       .glass-glow { border-color: var(--border-bright);
                     box-shadow: 0 0 0 1px rgba(120,190,255,.06), 0 0 34px rgba(34,211,238,.08); }
 
+      /* Equal-height cards that wrap instead of squeezing on narrow screens. */
+      .sgrid { display:grid; gap:14px; align-items:stretch; margin: 2px 0 14px;
+               grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); }
+
       .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
               padding: 14px 18px; backdrop-filter: blur(14px); position: relative;
               overflow: hidden; transition: transform .25s ease, border-color .25s ease;
-              animation: riseIn .6s cubic-bezier(.2,.8,.2,1) both; }
+              animation: riseIn .6s cubic-bezier(.2,.8,.2,1) both;
+              height:100%; display:flex; flex-direction:column; }
       .stat:hover { transform: translateY(-3px); border-color: var(--border-bright); }
       .stat::after { content:""; position:absolute; left:0; right:0; bottom:0; height:2px;
                      background: var(--grad); transform-origin: left;
                      animation: wipeIn 1.1s cubic-bezier(.2,.8,.2,1) both .15s; }
       @keyframes riseIn { from { opacity:0; transform: translateY(12px); } }
       @keyframes wipeIn { from { transform: scaleX(0); } }
+      /* Two lines are reserved for every label so values share one baseline. */
       .stat .label { color: var(--muted); font-size: 11px; letter-spacing: 1.2px;
-                     text-transform: uppercase; }
-      .stat .value { font-size: 30px; font-weight: 700; margin-top: 4px; }
-      .stat .delta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+                     line-height: 1.25; min-height: 2.5em; text-transform: uppercase; }
+      .stat .value { font-size: clamp(23px, 2.1vw, 30px); font-weight: 700;
+                     line-height: 1.15; margin-top: 2px;
+                     overflow-wrap: anywhere; }
+      /* Pushed to the floor of the card so deltas line up across a row. */
+      .stat .delta { font-size: 12px; color: var(--muted); margin-top: auto; padding-top: 4px; }
       .stat.accent .value { background: var(--grad); -webkit-background-clip:text;
                             background-clip:text; -webkit-text-fill-color:transparent; }
 
@@ -215,12 +224,25 @@ st.markdown(
                        animation: sheen 8s ease-in-out infinite; }
       @keyframes sheen { 0%,58% { left:-55%; } 100% { left:135%; } }
       .panel.tall { min-height: 268px; }
-      .panel-head { display:flex; align-items:baseline; gap:10px; margin-bottom:14px; }
+      .panel-head { display:flex; align-items:baseline; gap:10px; margin-bottom:14px;
+                    flex-wrap:wrap; }
       .panel-title { font-size:14px; font-weight:600; letter-spacing:.2px; }
-      .panel-sub { color:var(--muted); font-size:11.5px; }
-      .panel-tag { margin-left:auto; font-size:10px; font-weight:700; letter-spacing:1.4px;
+      .panel-sub { color:var(--muted); font-size:11.5px; min-width:0; }
+      .panel-tag { margin-left:auto; flex:0 0 auto; font-size:10px; font-weight:700;
+                   letter-spacing:1.4px;
                    text-transform:uppercase; color:#8fb7dd; border:1px solid var(--border);
                    border-radius:999px; padding:3px 10px; }
+      /* Body fills the leftover height so charts centre and panel floors line up. */
+      .panel-body { flex:1 1 auto; min-width:0; display:flex; flex-direction:column;
+                    justify-content:center; }
+
+      /* Panels in a row: equal height, and they wrap rather than shrink to nothing. */
+      .pgrid { display:grid; gap:18px; align-items:stretch; margin-bottom:14px;
+               grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+      .pgrid > .panel { height:100%; margin-bottom:0; display:flex; flex-direction:column; }
+      .pgrid.r-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .pgrid.r-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .pgrid.r-narrow-wide { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }
 
       .gauge-wrap { display:flex; justify-content:center; }
       .gauge { width:100%; max-width:250px; overflow:visible; }
@@ -427,6 +449,30 @@ st.markdown(
       @media (max-width: 680px) {
         .botdock { left:12px; right:12px; bottom:12px; width:auto !important; }
         .botdock.collapsed { left:auto !important; }
+      }
+
+      /* ---------- responsive layout ---------- */
+      [data-testid="stHorizontalBlock"] { align-items: stretch; }
+
+      @media (max-width: 1180px) {
+        .pgrid.r-3 { grid-template-columns: repeat(auto-fit, minmax(258px, 1fr)); }
+        /* Wider minimum so a six-card row breaks 3+3 rather than 5+1. */
+        .sgrid { grid-template-columns: repeat(auto-fit, minmax(196px, 1fr)); }
+      }
+      @media (max-width: 900px) {
+        .pgrid, .pgrid.r-2, .pgrid.r-3, .pgrid.r-narrow-wide {
+          grid-template-columns: minmax(0, 1fr); }
+        /* Columns that hold real widgets can't become grids, so stack them here. */
+        [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
+        [data-testid="stColumn"] { flex: 1 1 100% !important; min-width: 100% !important; }
+      }
+      @media (max-width: 640px) {
+        .block-container { padding-left: 1rem !important; padding-right: 1rem !important; }
+        .sgrid { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 11px; }
+        .stat { padding: 12px 14px; }
+        .panel { padding: 14px 14px 12px; }
+        .gauge { max-width: 208px; }
+        .cb-lab { font-size: 9.5px; }
       }
 
       @media (prefers-reduced-motion: reduce) {
@@ -780,8 +826,36 @@ def panel_html(title: str, body: str, *, sub: str = "", tag: str = "", tall: boo
     return (
         f'<div class="panel{" tall" if tall else ""}"><div class="panel-head">'
         f'<span class="panel-title">{html_escape(title)}</span>{sub_html}{tag_html}</div>'
-        f"{body}</div>"
+        f'<div class="panel-body">{body}</div></div>'
     )
+
+
+def panel_grid_html(panels: list[str], *, ratio: str = "") -> str:
+    """Lay panels out as one equal-height row that wraps on smaller screens.
+
+    A CSS grid is used instead of st.columns so every panel in the row shares a
+    height and the row reflows to a single column on phones. ``ratio`` picks a
+    column template: "r-2", "r-3" or "r-narrow-wide".
+    """
+    cells = [p for p in panels if p]
+    if not cells:
+        return ""
+    css = f"pgrid {ratio}".strip()
+    return f'<div class="{css}">{"".join(cells)}</div>'
+
+
+def stats_grid_html(items: list[tuple]) -> str:
+    """Row of stat cards as one wrapping grid, so every card is the same height.
+
+    Items are ``(label, value)``, optionally with ``delta`` and ``accent``.
+    """
+    cells = []
+    for item in items:
+        label, value = item[0], item[1]
+        delta = item[2] if len(item) > 2 else ""
+        accent = bool(item[3]) if len(item) > 3 else False
+        cells.append(stat_html(label, value, delta, accent))
+    return f'<div class="sgrid">{"".join(cells)}</div>' if cells else ""
 
 
 def agent_nodes(report: AegisReport) -> list[tuple[str, str, str]]:
@@ -1014,79 +1088,75 @@ with tab_health:
     )
 
     st.markdown('<div class="kicker">Mission control</div>', unsafe_allow_html=True)
-    deck_l, deck_r = st.columns([1, 1.5], gap="large")
-    with deck_l:
-        st.markdown(
-            panel_html(
-                "Platform readiness",
-                gauge_html(
-                    readiness,
-                    "Readiness score",
-                    variant=score_variant(readiness),
-                    foot=readiness_note,
+    composition = [
+        (NODE_LABELS.get(label, label), count)
+        for label, count in sorted(nodes.items(), key=lambda kv: -kv[1])
+    ][:7]
+    st.markdown(
+        panel_grid_html(
+            [
+                panel_html(
+                    "Platform readiness",
+                    gauge_html(
+                        readiness,
+                        "Readiness score",
+                        variant=score_variant(readiness),
+                        foot=readiness_note,
+                    ),
+                    sub="graph · model · incidents",
+                    tag="live",
+                    tall=True,
                 ),
-                sub="graph · model · incidents",
-                tag="live",
-                tall=True,
-            ),
-            unsafe_allow_html=True,
-        )
-    with deck_r:
-        composition = [
-            (NODE_LABELS.get(label, label), count)
-            for label, count in sorted(nodes.items(), key=lambda kv: -kv[1])
-        ][:7]
-        st.markdown(
-            panel_html(
-                "Graph composition",
-                bars_html(composition, variant="info"),
-                sub=f"{sum(nodes.values())} nodes across {len(nodes)} labels",
-                tag="neo4j",
-                tall=True,
-            ),
-            unsafe_allow_html=True,
-        )
+                panel_html(
+                    "Graph composition",
+                    bars_html(composition, variant="info"),
+                    sub=f"{sum(nodes.values())} nodes across {len(nodes)} labels",
+                    tag="neo4j",
+                    tall=True,
+                ),
+            ],
+            ratio="r-narrow-wide",
+        ),
+        unsafe_allow_html=True,
+    )
 
     if nodes:
-        k1, k2, k3, k4, k5, k6 = st.columns(6)
-        k1.markdown(
-            stat_html("Microservices", str(nodes.get("Microservice", 0))), unsafe_allow_html=True)
-        k2.markdown(
-            stat_html("Code files", str(nodes.get("CodeFile", 0))), unsafe_allow_html=True)
-        k3.markdown(
-            stat_html("Test cases", str(nodes.get("TestCase", 0))), unsafe_allow_html=True)
-        k4.markdown(
-            stat_html("Incidents", str(nodes.get("Incident", 0)),
-                      delta=f"{len(open_inc)} open"), unsafe_allow_html=True)
-        k5.markdown(
-            stat_html("Releases", str(nodes.get("Release", 0))), unsafe_allow_html=True)
-        k6.markdown(
-            stat_html("PRs analyzed", str(nodes.get("PullRequest", 0))), unsafe_allow_html=True)
+        st.markdown(
+            stats_grid_html([
+                ("Microservices", str(nodes.get("Microservice", 0))),
+                ("Code files", str(nodes.get("CodeFile", 0))),
+                ("Test cases", str(nodes.get("TestCase", 0))),
+                ("Incidents", str(nodes.get("Incident", 0)), f"{len(open_inc)} open"),
+                ("Releases", str(nodes.get("Release", 0))),
+                ("PRs analyzed", str(nodes.get("PullRequest", 0))),
+            ]),
+            unsafe_allow_html=True,
+        )
 
-    chart_l, chart_r = st.columns([1, 1], gap="large")
-    with chart_l:
-        top_rels = sorted(rels.items(), key=lambda kv: -kv[1])[:6]
-        st.markdown(
-            panel_html(
-                "Relationship density",
-                meters_html([(rel, count) for rel, count in top_rels], variant="violet"),
-                sub=f"{sum(rels.values())} edges traversable",
-                tag="edges",
-            ),
-            unsafe_allow_html=True,
-        )
-    with chart_r:
-        cadence = [len(rel.get("services") or []) for rel in releases]
-        latest = releases[-1]["version"] if releases else "—"
-        st.markdown(
-            panel_html(
-                "Release cadence",
-                sparkline_html(cadence, variant="ok"),
-                sub=f"services per release · latest {latest}",
-                tag="timeline",
-            ),
-            unsafe_allow_html=True,
-        )
+    top_rels = sorted(rels.items(), key=lambda kv: -kv[1])[:6]
+    # CIG has no ship-frequency series; each point is services linked via RELEASED_IN.
+    footprint = [len(rel.get("services") or []) for rel in releases]
+    latest = releases[-1]["version"] if releases else "—"
+    st.markdown(
+        panel_grid_html(
+            [
+                panel_html(
+                    "Relationship density",
+                    meters_html([(rel, count) for rel, count in top_rels], variant="violet"),
+                    sub=f"{sum(rels.values())} edges traversable",
+                    tag="edges",
+                ),
+                panel_html(
+                    "Services per release",
+                    sparkline_html(footprint, variant="ok"),
+                    sub=f"microservices shipped in each version · latest {latest}",
+                    tag="releases",
+                ),
+            ],
+            ratio="r-2",
+        ),
+        unsafe_allow_html=True,
+    )
 
     col_stat, col_graph = st.columns([1, 1], gap="large")
     with col_stat:
@@ -1223,50 +1293,45 @@ with tab_analyze:
             confidence = min(max(report.merge_confidence, 0.0), 100.0)
             regression = min(max(report.regression_probability * 100.0, 0.0), 100.0)
             alignment_label = report.agent_outputs.get("alignment", "GAPS")
-            d1, d2, d3 = st.columns([1, 1, 1], gap="large")
-            with d1:
-                st.markdown(
-                    f'<div class="panel verdict-panel">'
-                    f'<div class="vlabel">Verdict</div>'
-                    f'<span class="badge {VERDICT_COLORS.get(report.verdict, "review")}">'
-                    f'{html_escape(report.verdict)}</span>'
-                    f'<div class="vsub">Requirement alignment · '
-                    f'<b>{html_escape(str(alignment_label))}</b></div>'
-                    f'<div class="vsub" style="color:var(--muted)">'
-                    f'{"LLM agents" if report.mode == "full" else "deterministic"} mode</div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-            with d2:
-                st.markdown(
-                    panel_html(
-                        "Merge confidence",
-                        gauge_html(
-                            confidence,
-                            "Confidence",
-                            variant=score_variant(confidence),
-                            foot="Higher is safer to merge",
+            st.markdown(
+                panel_grid_html(
+                    [
+                        f'<div class="panel verdict-panel">'
+                        f'<div class="vlabel">Verdict</div>'
+                        f'<span class="badge {VERDICT_COLORS.get(report.verdict, "review")}">'
+                        f'{html_escape(report.verdict)}</span>'
+                        f'<div class="vsub">Requirement alignment · '
+                        f'<b>{html_escape(str(alignment_label))}</b></div>'
+                        f'<div class="vsub" style="color:var(--muted)">'
+                        f'{"LLM agents" if report.mode == "full" else "deterministic"} mode</div>'
+                        f"</div>",
+                        panel_html(
+                            "Merge confidence",
+                            gauge_html(
+                                confidence,
+                                "Confidence",
+                                variant=score_variant(confidence),
+                                foot="Higher is safer to merge",
+                            ),
+                            tag="score",
+                            tall=True,
                         ),
-                        tag="score",
-                        tall=True,
-                    ),
-                    unsafe_allow_html=True,
-                )
-            with d3:
-                st.markdown(
-                    panel_html(
-                        "Regression risk",
-                        gauge_html(
-                            regression,
-                            "Risk score",
-                            variant=score_variant(regression, invert=True),
-                            foot="Likelihood this change breaks something",
+                        panel_html(
+                            "Regression risk",
+                            gauge_html(
+                                regression,
+                                "Risk score",
+                                variant=score_variant(regression, invert=True),
+                                foot="Likelihood this change breaks something",
+                            ),
+                            tag="risk",
+                            tall=True,
                         ),
-                        tag="risk",
-                        tall=True,
-                    ),
-                    unsafe_allow_html=True,
-                )
+                    ],
+                    ratio="r-3",
+                ),
+                unsafe_allow_html=True,
+            )
 
             st.markdown('<div class="kicker">Requirements alignment</div>', unsafe_allow_html=True)
             alignment = report.story_alignment
@@ -1310,39 +1375,38 @@ with tab_analyze:
                 })
 
             if rows:
-                br_l, br_r = st.columns([1, 1], gap="large")
-                with br_l:
-                    st.markdown(
-                        panel_html(
-                            "Test coverage by service",
-                            meters_html(
-                                [(r["Service"], r["Tests"]) for r in rows], variant="ok",
-                                unit=" tests",
+                st.markdown(
+                    panel_grid_html(
+                        [
+                            panel_html(
+                                "Test coverage by service",
+                                meters_html(
+                                    [(r["Service"], r["Tests"]) for r in rows], variant="ok",
+                                    unit=" tests",
+                                ),
+                                sub="automated tests guarding each affected service",
+                                tag="coverage",
                             ),
-                            sub="automated tests guarding each affected service",
-                            tag="coverage",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-                with br_r:
-                    st.markdown(
-                        panel_html(
-                            "Exposure surface",
-                            bars_html(
-                                [
-                                    ("Services", len(rows)),
-                                    ("Routes", sum(r["Routes"] for r in rows)),
-                                    ("Flows", sum(r["Flows"] for r in rows)),
-                                    ("Tests", sum(r["Tests"] for r in rows)),
-                                    ("Incidents", sum(r["Past incidents"] for r in rows)),
-                                ],
-                                variant="warn",
+                            panel_html(
+                                "Exposure surface",
+                                bars_html(
+                                    [
+                                        ("Services", len(rows)),
+                                        ("Routes", sum(r["Routes"] for r in rows)),
+                                        ("Flows", sum(r["Flows"] for r in rows)),
+                                        ("Tests", sum(r["Tests"] for r in rows)),
+                                        ("Incidents", sum(r["Past incidents"] for r in rows)),
+                                    ],
+                                    variant="warn",
+                                ),
+                                sub="everything reachable from the changed files",
+                                tag="graph walk",
                             ),
-                            sub="everything reachable from the changed files",
-                            tag="graph walk",
-                        ),
-                        unsafe_allow_html=True,
-                    )
+                        ],
+                        ratio="r-2",
+                    ),
+                    unsafe_allow_html=True,
+                )
 
             st.dataframe(
                 rows,
@@ -1373,47 +1437,45 @@ with tab_analyze:
             total = suite.get("total_tests", 0)
             reduction = suite.get("reduction_pct", 0)
             targeted = len(report.recommended_tests)
-            tt_l, tt_r = st.columns([1, 1.5], gap="large")
-            with tt_l:
-                st.markdown(
-                    panel_html(
-                        "Suite reduction",
-                        gauge_html(
-                            min(max(float(reduction), 0.0), 100.0),
-                            "Suite cut",
-                            variant="ok",
-                            foot=f"{targeted} of {total} tests selected",
+            st.markdown(
+                panel_grid_html(
+                    [
+                        panel_html(
+                            "Suite reduction",
+                            gauge_html(
+                                min(max(float(reduction), 0.0), 100.0),
+                                "Suite cut",
+                                variant="ok",
+                                foot=f"{targeted} of {total} tests selected",
+                            ),
+                            tag="targeting",
+                            tall=True,
                         ),
-                        tag="targeting",
-                        tall=True,
-                    ),
-                    unsafe_allow_html=True,
-                )
-            with tt_r:
-                st.markdown(
-                    panel_html(
-                        "Full suite vs targeted run",
-                        bars_html(
-                            [("Full suite", total), ("Targeted", targeted),
-                             ("Skipped", max(total - targeted, 0))],
-                            variant="violet",
+                        panel_html(
+                            "Full suite vs targeted run",
+                            bars_html(
+                                [("Full suite", total), ("Targeted", targeted),
+                                 ("Skipped", max(total - targeted, 0))],
+                                variant="violet",
+                            ),
+                            sub="graph-selected tests replace the whole suite",
+                            tag="tests",
+                            tall=True,
                         ),
-                        sub="graph-selected tests replace the whole suite",
-                        tag="tests",
-                        tall=True,
-                    ),
-                    unsafe_allow_html=True,
-                )
-            c1, c2, c3 = st.columns(3)
-            c1.markdown(
-                stat_html("Suite size", f"{total} tests"), unsafe_allow_html=True)
-            c2.markdown(
-                stat_html("Targeted", f"{targeted} tests",
-                          delta="instead of the full suite"), unsafe_allow_html=True)
-            c3.markdown(
-                stat_html("Suite cut", f"{reduction:.1f}%", accent=True,
-                          delta=f"−{max(total - targeted, 0)} tests not run"),
-                unsafe_allow_html=True)
+                    ],
+                    ratio="r-narrow-wide",
+                ),
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                stats_grid_html([
+                    ("Suite size", f"{total} tests"),
+                    ("Targeted", f"{targeted} tests", "instead of the full suite"),
+                    ("Suite cut", f"{reduction:.1f}%",
+                     f"−{max(total - targeted, 0)} tests not run", True),
+                ]),
+                unsafe_allow_html=True,
+            )
 
             if report.recommended_tests:
                 test_rows = [{
@@ -1433,17 +1495,15 @@ with tab_analyze:
                 st.info("No tests in scope.")
 
             st.markdown('<div class="kicker">Risk signals</div>', unsafe_allow_html=True)
-            c1, c2, c3, c4 = st.columns(4)
-            c1.markdown(
-                stat_html("Files changed", str(features.get("num_files", 0))), unsafe_allow_html=True)
-            c2.markdown(
-                stat_html("Code churn", f'{features.get("churn", 0)} lines'), unsafe_allow_html=True)
-            c3.markdown(
-                stat_html("File coverage", f'{features.get("file_test_coverage_ratio", 0):.0%}'),
-                unsafe_allow_html=True)
-            c4.markdown(
-                stat_html("Open incidents", str(len(features.get("past_incidents", [])) or 0)),
-                unsafe_allow_html=True)
+            st.markdown(
+                stats_grid_html([
+                    ("Files changed", str(features.get("num_files", 0))),
+                    ("Code churn", f'{features.get("churn", 0)} lines'),
+                    ("File coverage", f'{features.get("file_test_coverage_ratio", 0):.0%}'),
+                    ("Open incidents", str(len(features.get("past_incidents", [])) or 0)),
+                ]),
+                unsafe_allow_html=True,
+            )
 
             st.markdown('<div class="kicker">Data provenance</div>', unsafe_allow_html=True)
             st.markdown(provenance_html(report), unsafe_allow_html=True)
