@@ -289,7 +289,7 @@ def _render_github_block(gh_details: dict, gh_status: dict | None, gh_var: str, 
             gh_map = st.text_input(
                 "CIG → GitHub PR map",
                 value=_cfg("GITHUB_PR_MAP"),
-                placeholder="482:1, 500:2",
+                placeholder="leave empty when CIG numbers are GitHub numbers",
             )
             gh_opts = ["auto", "mcp", "fixture"]
             gh_source = st.selectbox(

@@ -14,6 +14,7 @@ from aegis.integrations.mcp_runtime import (
     GITHUB_MCP_PACKAGE,
     McpError,
     call_github_tool,
+    call_github_tools,
     mcp_status_failed,
     mcp_status_unconfigured,
 )
@@ -32,6 +33,17 @@ def github_configured() -> bool:
         and config.setting("GITHUB_REPO_OWNER")
         and config.setting("GITHUB_REPO_NAME")
     )
+
+
+def _as_list(data: Any) -> list:
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("items", "files", "pulls", "data", "result"):
+            val = data.get(key)
+            if isinstance(val, list):
+                return val
+    return []
 
 
 def _mcp(tool: str, arguments: dict[str, Any] | None = None) -> Any:
@@ -85,6 +97,80 @@ class GitHubClient:
         if isinstance(data, list) and data:
             return data[0]
         return stub
+
+    def list_pull_requests(self, state: str = "open") -> list[dict]:
+        data = _mcp(
+            "list_pull_requests",
+            {"owner": self.owner, "repo": self.repo, "state": state},
+        )
+        return _as_list(data)
+
+    def get_pull_request(self, pull_number: int) -> dict:
+        data = _mcp(
+            "get_pull_request",
+            {
+                "owner": self.owner,
+                "repo": self.repo,
+                "pull_number": int(pull_number),
+            },
+        )
+        return data if isinstance(data, dict) else {}
+
+    def get_pull_request_files(self, pull_number: int) -> list[dict]:
+        data = _mcp(
+            "get_pull_request_files",
+            {
+                "owner": self.owner,
+                "repo": self.repo,
+                "pull_number": int(pull_number),
+            },
+        )
+        return _as_list(data)
+
+    def get_pull_request_bundle(self, pull_number: int) -> tuple[dict, list[dict]]:
+        """PR metadata + files in a single MCP server spawn."""
+        n = int(pull_number)
+        args = {"owner": self.owner, "repo": self.repo, "pull_number": n}
+        try:
+            raw_pr, raw_files = call_github_tools(
+                [("get_pull_request", args), ("get_pull_request_files", args)]
+            )
+        except McpError as exc:
+            raise GitHubError(str(exc), body=exc.body) from exc
+        pr = raw_pr if isinstance(raw_pr, dict) else {}
+        return pr, _as_list(raw_files)
+
+    def list_pull_requests_with_files(self, state: str = "all") -> list[tuple[dict, list[dict]]]:
+        """List PRs, then fetch files for each, using two MCP spawns total."""
+        stubs = self.list_pull_requests(state=state)
+        numbers = []
+        for raw in stubs:
+            try:
+                n = int(raw.get("number") or 0)
+            except (TypeError, ValueError):
+                n = 0
+            if n:
+                numbers.append(n)
+        if not numbers:
+            return []
+        calls: list[tuple[str, dict]] = []
+        for n in numbers:
+            args = {"owner": self.owner, "repo": self.repo, "pull_number": n}
+            calls.append(("get_pull_request", args))
+            calls.append(("get_pull_request_files", args))
+        try:
+            results = call_github_tools(calls)
+        except McpError as exc:
+            raise GitHubError(str(exc), body=exc.body) from exc
+        out = []
+        for i, n in enumerate(numbers):
+            raw_pr = results[2 * i] if 2 * i < len(results) else {}
+            raw_files = results[2 * i + 1] if 2 * i + 1 < len(results) else []
+            pr = raw_pr if isinstance(raw_pr, dict) else {"number": n}
+            if not pr.get("number"):
+                pr = {**pr, "number": n}
+            out.append((pr, _as_list(raw_files)))
+        return out
 
     def create_issue_comment(self, issue_number: int, body: str) -> dict:
         data = _mcp(

@@ -1,8 +1,8 @@
 """Run an AEGIS PR analysis or deployment assessment from the terminal.
 
 Usage:
-  python scripts/analyze_pr.py --pr 482
-  python scripts/analyze_pr.py --deploy "v1.12.0" --services payment-svc order-svc
+  python scripts/analyze_pr.py --pr 1
+  python scripts/analyze_pr.py --deploy "v1.12.0" --services payment-svc
 """
 
 import argparse

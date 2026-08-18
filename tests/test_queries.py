@@ -2,7 +2,7 @@
 
 Validates the Python-side assembly of blast radius, test selection and
 risk features. Cypher execution itself requires a live Neo4j and is
-verified via scripts/seed_graph.py once the stack is up.
+verified via scripts/seed_graph.py (live GitHub + Jira) once the stack is up.
 """
 
 import unittest

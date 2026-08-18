@@ -39,6 +39,12 @@ def ingest_code_file(cig, path: str, *, language: str | None = None,
         )
 
 
+def reset_graph(cig) -> None:
+    """Drop every node/relationship, then reinstall uniqueness constraints."""
+    cig.run("MATCH (n) DETACH DELETE n")
+    schema.install_schema(cig)
+
+
 def ingest_jira_story(cig, key: str, title: str, *, status: str | None = None,
                       points: int | None = None, epic: str | None = None) -> None:
     cig.run(
@@ -55,7 +61,7 @@ def ingest_pull_request(cig, number: int, title: str, author: str, *, base: str,
                         head: str, state: str = "open") -> None:
     cig.run(
         f"MERGE (pr:{schema.PULL_REQUEST} {{number: $number}}) "
-        "SET pr.title = COALESCE($title, pr.title), "
+        "SET pr.title = $title, "
         "    pr.author = COALESCE($author, pr.author), "
         "    pr.base = COALESCE($base, pr.base), "
         "    pr.head = COALESCE($head, pr.head), "
@@ -80,6 +86,16 @@ def ingest_pr_changes(cig, pr_number: int, changes: list[dict]) -> None:
         )
 
 
+def replace_pr_changes(cig, pr_number: int, changes: list[dict]) -> None:
+    """Drop previous MODIFIES edges, then write the live GitHub file list."""
+    cig.run(
+        f"MATCH (pr:{schema.PULL_REQUEST} {{number: $number}})"
+        f"-[r:{schema.MODIFIES}]->(:{schema.CODE_FILE}) DELETE r",
+        number=pr_number,
+    )
+    ingest_pr_changes(cig, pr_number, changes)
+
+
 def link_pr_to_story(cig, pr_number: int, story_key: str) -> None:
     cig.run(
         f"MATCH (pr:{schema.PULL_REQUEST} {{number: $number}}), "
@@ -87,6 +103,20 @@ def link_pr_to_story(cig, pr_number: int, story_key: str) -> None:
         f"MERGE (pr)-[:{schema.ADDRESSES}]->(s)",
         number=pr_number, key=story_key,
     )
+
+
+def unlink_pr_stories(cig, pr_number: int) -> None:
+    cig.run(
+        f"MATCH (pr:{schema.PULL_REQUEST} {{number: $number}})"
+        f"-[r:{schema.ADDRESSES}]->(:{schema.JIRA_STORY}) DELETE r",
+        number=pr_number,
+    )
+
+
+def relink_pr_to_story(cig, pr_number: int, story_key: str) -> None:
+    """Replace every ADDRESSES edge on the PR with a single story."""
+    unlink_pr_stories(cig, pr_number)
+    link_pr_to_story(cig, pr_number, story_key)
 
 
 def ingest_api_route(cig, microservice: str, method: str, path: str) -> None:

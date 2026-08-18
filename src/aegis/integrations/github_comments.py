@@ -10,11 +10,8 @@ from aegis.integrations.github_client import GitHubClient, GitHubError, github_c
 
 MARKER = "<!-- aegis-report -->"
 
-# Demo CIG PRs → live PRs on GITHUB_REPO_OWNER/GITHUB_REPO_NAME
-DEFAULT_CIG_TO_GITHUB = {
-    482: 1,  # payment refund / gateway
-    500: 2,  # auth signing key rotation
-}
+# Optional CIG PR → GitHub PR map. Empty: CIG numbers are GitHub numbers.
+DEFAULT_CIG_TO_GITHUB: dict[int, int] = {}
 
 
 def parse_pr_map(raw: str | None) -> dict[int, int]:
@@ -65,7 +62,7 @@ def format_report_markdown(report: AegisReport, *, github_pr_number: int | None 
             f"**Requirement alignment:** `{alignment}`  ",
             f"**Security:** `{(report.agent_outputs or {}).get('security', '—')}`  ",
             f"**Safe-to-merge score:** {report.merge_confidence:.0f}%  ",
-            f"**Breakage likelihood:** {report.regression_probability:.0%}",
+            f"**Risk Score:** {report.regression_probability:.0%}",
             "",
             "### Blast radius",
             "",
@@ -90,6 +87,22 @@ def format_report_markdown(report: AegisReport, *, github_pr_number: int | None 
             add = f.get("additions") or 0
             dele = f.get("deletions") or 0
             lines.append(f"- `{path}` ({ms}, +{add}/−{dele})")
+
+    suggestions = getattr(report, "story_suggestions", None) or []
+    if suggestions:
+        best = suggestions[0]
+        lines.extend(
+            [
+                "",
+                "### Suggested Jira ticket",
+                "",
+                f"**Best fit:** `{best.get('key')}` — {best.get('title')}  ",
+                f"Epic: `{best.get('epic') or '—'}` · "
+                + "; ".join(best.get("reasons") or []) ,
+                "",
+                f"Put `{best.get('key')}` in the GitHub PR title, then re-run AEGIS.",
+            ]
+        )
 
     tests = report.recommended_tests or []
     lines.extend(["", "### Recommended tests (targeted)", ""])

@@ -17,16 +17,15 @@ class PrMapTest(unittest.TestCase):
         self.assertEqual(parse_pr_map(""), {})
         self.assertEqual(parse_pr_map("nope"), {})
 
-    def test_demo_defaults(self):
-        self.assertEqual(resolve_github_pr_number(482), 1)
-        self.assertEqual(resolve_github_pr_number(500), 2)
+    def test_identity_when_unmapped(self):
         self.assertEqual(resolve_github_pr_number(1), 1)
+        self.assertEqual(resolve_github_pr_number(2), 2)
 
 
 class FormatMarkdownTest(unittest.TestCase):
     def test_contains_verdict_and_marker(self):
         report = AegisReport(
-            pr_number=482,
+            pr_number=1,
             verdict="REVIEW",
             merge_confidence=54.0,
             regression_probability=0.46,
@@ -39,5 +38,24 @@ class FormatMarkdownTest(unittest.TestCase):
         self.assertIn(MARKER, md)
         self.assertIn("`REVIEW`", md)
         self.assertIn("GitHub PR:** #1", md)
-        self.assertIn("CIG PR:** #482", md)
+        self.assertNotIn("CIG PR:", md)
         self.assertIn("pay-test-refund", md)
+
+    def test_includes_suggested_jira(self):
+        report = AegisReport(
+            pr_number=2,
+            verdict="REJECT",
+            story_alignment={"alignment": "GAPS"},
+            agent_outputs={"alignment": "GAPS", "raw": {}},
+            story_suggestions=[
+                {
+                    "key": "AEG-1",
+                    "title": "Secure demo token issuance",
+                    "epic": "platform",
+                    "reasons": ["epic 'platform' matches the files' product area"],
+                }
+            ],
+        )
+        md = format_report_markdown(report)
+        self.assertIn("Suggested Jira ticket", md)
+        self.assertIn("AEG-1", md)

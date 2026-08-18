@@ -35,7 +35,7 @@ The result: **~79% regression-suite cut** for a typical change, while still cove
 1. **CIG (Neo4j)** stores the entity graph (see [Graph schema](#graph-schema)).
 2. **The query layer** does all deterministic graph math — blast radius traversal, targeted test selection, risk features, story↔file alignment. Fast, offline, repeatable.
 3. **CrewAI agents** add judgment over that evidence using a local Ollama LLM. If the LLM is slow or fails to follow format, the orchestrator **falls back to deterministic math** so the pipeline never bricks.
-4. **The orchestrator** assembles an `AegisReport` — verdict, merge confidence, regression probability, blast radius, recommended tests, requirements alignment and full **provenance** (every Cypher query executed).
+4. **The orchestrator** assembles an `AegisReport` — verdict, merge confidence, **Risk Score**, blast radius, recommended tests, requirements alignment and full **provenance** (every Cypher query executed).
 
 Two modes:
 - **Fast / deterministic** — graph math only. Instant, no LLM needed.
@@ -51,7 +51,7 @@ aegis/
 ├── docker/python.Dockerfile    # app image
 ├── requirements.txt / pyproject.toml
 ├── scripts/
-│   ├── seed_graph.py           # idempotent demo-data seeding + CLI analysis
+│   ├── seed_graph.py           # wipe CIG and sync live GitHub PRs + Jira issues
 │   └── analyze_pr.py           # CLI: PR analysis / deployment assessment
 ├── src/aegis/
 │   ├── __init__.py             # disables CrewAI telemetry for Streamlit safety
@@ -118,7 +118,7 @@ cp .env.example .env        # then edit NEO4J_PASSWORD / OLLAMA_MODEL
 docker compose up -d --build
 ```
 
-Wait for healthchecks, then seed demo data and open the dashboard:
+Wait for healthchecks, then sync live GitHub + Jira into the CIG and open the dashboard:
 
 ```bash
 # inside the app container (or on host if deps installed):
@@ -137,12 +137,12 @@ pip install -e .
 # Neo4j + Ollama via Docker (infra only):
 docker compose up -d neo4j ollama
 
-# Seed and run:
+# Wipe the graph and ingest live GitHub PRs + Jira issues:
 python scripts/seed_graph.py
 streamlit run src/aegis/ui/app.py
 ```
 
-The seed is idempotent — re-run it any time to reset the demo data.
+Re-run `scripts/seed_graph.py` any time to wipe synthetic leftovers and refresh from GitHub and Jira.
 
 ---
 
@@ -155,7 +155,7 @@ Open `http://localhost:8501`:
 - **Infrastructure & CIG** — stack status, graph intelligence (node/relationship counts), open incidents, release timeline, and the seven CrewAI agents.
 - **PR Analysis** — pick a PR, toggle **Fast mode** (deterministic, instant) or let the agents reason over the local LLM, then inspect:
   - agent output diagram (each agent's verdict line)
-  - final verdict + merge confidence + regression probability
+  - final verdict + merge confidence + **Risk Score**
   - requirements alignment (green ✓ / red ✗ per changed file vs. linked story epic)
   - blast chain (hop-distance through the dependency graph)
   - targeted test set with the suite-cut metric
@@ -164,20 +164,26 @@ Open `http://localhost:8501`:
 ### CLI
 
 ```bash
-python scripts/analyze_pr.py --pr 482            # full agent analysis
-python scripts/analyze_pr.py --pr 482 --fast     # deterministic only
-python scripts/analyze_pr.py --deploy v1.11.0 --services payment-svc order-svc
+python scripts/analyze_pr.py --pr 1              # full agent analysis
+python scripts/analyze_pr.py --pr 1 --fast       # deterministic only
+python scripts/analyze_pr.py --deploy v1.11.0 --services payment-svc
 ```
 
-### Demo data (seeded)
+### Demo data (live GitHub + Jira)
 
-| PR | Change | Verdict | Why |
+The CIG is **not** preloaded with fake PRs. `scripts/seed_graph.py` wipes Neo4j and ingests:
+
+- GitHub pull requests and changed files from `GITHUB_REPO_OWNER/GITHUB_REPO_NAME`
+- Jira issues from `JIRA_PROJECT_KEY`
+- Microservices inferred from file paths (`payment-svc/…`, `auth-svc/…`)
+
+On [dummy-ecommerce](https://github.com/rizwanrnt/dummy-ecommerce/pulls):
+
+| PR | Jira | Change | Alignment |
 |---|---|---|---|
-| #482 | `refund.py` + `gateway.py` (payments) | **REVIEW** | aligned, but 3-service blast radius, 54% confidence |
-| #500 | `token.py` (auth) | **APPROVE** | isolated 4-line change, 90% confidence |
-| #501 | `charge.py` + `refund.py` under a Platform story | **REJECT** | payment files under `AEG-999` (epic mismatch → GAPS) |
-
-Suite targeting: **5 of 24 tests** recommended for PR #482 (−79%), covering direct files, affected services and regression history. Open incidents (e.g. INC-2099) are excluded from regression history — they're current problems handled by deployment readiness, not past signal.
+| #1 | **AEG-4** Payments | `payment-svc` refund/gateway | **ALIGNED** — files match the ticket |
+| #2 | **AEG-1** (if cited) | `auth-svc` key rotation | isolated auth change |
+| #3 | **AEG-5** Platform / admin dark mode | `payment-svc/src/charge.ts` | **GAPS / REJECT** — admin ticket, payments code |
 
 ---
 
@@ -200,7 +206,7 @@ Suite targeting: **5 of 24 tests** recommended for PR #482 (−79%), covering di
 python -m unittest discover -s tests -v
 ```
 
-The query-layer tests run against a canned client (no live DB); Cypher execution itself is validated by `scripts/seed_graph.py` once the stack is up.
+The query-layer tests run against a canned client (no live DB); Cypher execution itself is validated by `scripts/seed_graph.py` against live GitHub and Jira once the stack is up.
 
 ---
 
@@ -211,10 +217,8 @@ Open `http://localhost:7474` and try:
 ```cypher
 MATCH (n) RETURN n                                          // everything, color-coded
 MATCH (ms:Microservice)-[d:DEPENDS_ON]->(dep) RETURN ms, d, dep   // dependency graph
-MATCH p=(pr:PullRequest {number:482})-[:MODIFIES]->(:CodeFile)-[:BELONGS_TO]->(:Microservice) RETURN p
-MATCH (t:TestCase)-[:COVERS]->(f:CodeFile) RETURN t, f LIMIT 25
-MATCH (ms:Microservice)-[:HAS_INCIDENT]->(i:Incident)<-[:DETECTS]-(t:TestCase) RETURN ms, i, t
-MATCH (ms:Microservice)-[:RELEASED_IN]->(r:Release) RETURN ms.name, r.version, r.deployed_at
+MATCH p=(pr:PullRequest {number:1})-[:MODIFIES]->(:CodeFile)-[:BELONGS_TO]->(:Microservice) RETURN p
+MATCH (pr:PullRequest)-[:ADDRESSES]->(s:JiraStory) RETURN pr.number, pr.title, s.key, s.epic
 ```
 
 Every query the dashboard runs is printed verbatim in its **Data provenance** panel — copy any of them straight into Neo4j Browser.

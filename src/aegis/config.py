@@ -34,7 +34,7 @@ OLLAMA_MODEL = env("OLLAMA_MODEL", "LFM2.5:Q4")
 GITHUB_TOKEN = env("GITHUB_TOKEN")
 GITHUB_REPO_OWNER = env("GITHUB_REPO_OWNER")
 GITHUB_REPO_NAME = env("GITHUB_REPO_NAME")
-# Optional CIG PR → GitHub PR map, e.g. "482:1,500:2"
+# Optional CIG PR → GitHub PR map (empty when numbers already match GitHub)
 GITHUB_PR_MAP = env("GITHUB_PR_MAP", "")
 # auto | mcp | fixture  (auto uses GitHub MCP when token set)
 GITHUB_SOURCE = (env("GITHUB_SOURCE", "auto") or "auto").strip().lower()

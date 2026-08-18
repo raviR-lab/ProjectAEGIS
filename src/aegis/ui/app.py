@@ -1,6 +1,7 @@
 import importlib
 import itertools
 import math
+import re
 import sys
 from html import escape as html_escape
 from pathlib import Path
@@ -20,6 +21,11 @@ for _mod_name in (
     "aegis.integrations.jira_client",
     "aegis.integrations.jenkins_client",
     "aegis.integrations.teams_client",
+    "aegis.graph.ingest",
+    "aegis.graph.sync",
+    "aegis.graph.recommend",
+    "aegis.graph.queries",
+    "aegis.core.orchestrator",
     "aegis.ui.mcp_panel",
 ):
     if _mod_name in sys.modules:
@@ -28,12 +34,28 @@ for _mod_name in (
 import streamlit as st
 
 from aegis.agents.registry import AGENT_SPECS
-from aegis.core.orchestrator import AegisOrchestrator, AegisReport
+from aegis.core.orchestrator import (
+    AegisOrchestrator,
+    AegisReport,
+    BLAST_EXTRA_SERVICE,
+    BLAST_FLOW_RISK,
+    BLAST_INCIDENT_RISK,
+    CONFIDENCE_MAX,
+    GAP_RISK,
+    LLM_RISK_WEIGHT,
+    RISK_CHURN_CAP,
+    SCORE_MAX,
+    SECURITY_FAIL_RISK,
+    SECURITY_REVIEW_RISK,
+    TEST_NONE_RISK,
+    TEST_UNCOVERED_RISK,
+)
 from aegis.graph import queries
 from aegis.graph.neo4j import CIGClient
 from aegis.integrations.github_comments import maybe_post_report, resolve_github_pr_number
 from aegis.llm.ollama import OllamaClient
 from aegis.ui.mcp_panel import render_mcp_panel
+
 
 st.set_page_config(page_title="Project AEGIS", layout="wide")
 
@@ -42,31 +64,64 @@ st.markdown(
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap');
 
+      /* light-dark() follows Streamlit's color-scheme on .stApp — no JS, instant toggle. */
       :root {
-        --bg: #070b14;
-        --panel: rgba(13, 19, 33, 0.72);
-        --panel-solid: #0d1321;
-        --border: rgba(120, 150, 220, 0.16);
-        --border-bright: rgba(120, 190, 255, 0.35);
-        --text: #dbe4f5;
-        --muted: #7a8ba8;
         --cyan: #22d3ee;
         --violet: #a78bfa;
         --green: #34d399;
         --amber: #fbbf24;
         --rose: #fb7185;
         --grad: linear-gradient(120deg, #22d3ee 0%, #a78bfa 55%, #f472b6 100%);
+        --bg: light-dark(#f4f7fc, #070b14);
+        --panel: light-dark(rgba(255, 255, 255, 0.92), rgba(13, 19, 33, 0.72));
+        --panel-solid: light-dark(#ffffff, #0d1321);
+        --border: light-dark(rgba(15, 23, 42, 0.12), rgba(120, 150, 220, 0.16));
+        --border-bright: light-dark(rgba(14, 165, 233, 0.35), rgba(120, 190, 255, 0.35));
+        --text: light-dark(#0f172a, #dbe4f5);
+        --muted: light-dark(#64748b, #7a8ba8);
+        --text-soft: light-dark(#334155, #c8d6f0);
+        --text-strong: light-dark(#0f172a, #eef4ff);
+        --text-code: light-dark(#475569, #b7c4de);
+        --accent-tag: light-dark(#0369a1, #8fb7dd);
+        --term-fg: light-dark(#0e7490, #9ec9ea);
+        --term-bg: light-dark(rgba(255, 255, 255, 0.92), rgba(7, 14, 28, 0.55));
+        --input-bg: light-dark(rgba(255, 255, 255, 0.96), rgba(7, 14, 28, 0.55));
+        --btn-secondary-bg: light-dark(rgba(255, 255, 255, 0.96), rgba(13, 19, 33, 0.88));
+        --grid-line: light-dark(rgba(14, 116, 144, 0.08), rgba(120, 180, 255, 0.045));
+        --grid-glow-a: light-dark(#dbeafe, #0d1b3a);
+        --grid-glow-b: light-dark(#ede9fe, #1a0f33);
+        --shadow: light-dark(rgba(15, 23, 42, 0.08), rgba(0, 0, 0, 0.35));
+        --shadow-deep: light-dark(rgba(15, 23, 42, 0.12), rgba(0, 0, 0, 0.45));
+        --ticker-bg: light-dark(rgba(255, 255, 255, 0.78), rgba(9, 14, 26, 0.6));
+        --provenance-bg: light-dark(rgba(224, 242, 254, 0.55), rgba(13, 27, 58, 0.25));
+        --chip-bg: light-dark(rgba(226, 232, 240, 0.9), rgba(44, 62, 110, 0.35));
+        --chip-fg: light-dark(#334155, #c8d6f0);
+        --chip-border: light-dark(rgba(148, 163, 184, 0.4), rgba(120, 150, 220, 0.22));
+        --hop-bg: light-dark(rgba(226, 232, 240, 0.9), rgba(44, 62, 110, 0.35));
+        --cb-val: light-dark(#1e293b, #dce6fa);
+        --cb-track: light-dark(rgba(148, 163, 184, 0.18), rgba(120, 150, 220, 0.08));
+        --mt-track: light-dark(rgba(148, 163, 184, 0.18), rgba(120, 150, 220, 0.1));
+        --spark-dot-stroke: light-dark(#ffffff, #0b1120);
+        --tab-active-bg: light-dark(rgba(14, 165, 233, 0.12), rgba(34, 211, 238, 0.1));
+        --ok-fg: light-dark(#047857, #7ff0c6);
+        --warn-fg: light-dark(#b45309, #ffd98a);
+        --bad-fg: light-dark(#be123c, #ffb3c1);
+        --conn-fact-v: light-dark(#334155, #d5def0);
+        --glass-glow-border: light-dark(rgba(14, 165, 233, 0.22), rgba(120, 190, 255, 0.35));
+        --gauge-track: light-dark(rgba(148, 163, 184, 0.22), rgba(120, 150, 220, 0.13));
       }
 
-      .stApp { background:
-                 linear-gradient(rgba(120,180,255,.045) 1px, transparent 1px),
-                 linear-gradient(90deg, rgba(120,180,255,.045) 1px, transparent 1px),
-                 radial-gradient(1200px 700px at 15% -10%, #0d1b3a 0%, transparent 55%),
-                 radial-gradient(1000px 600px at 110% 20%, #1a0f33 0%, transparent 50%),
-                 var(--bg);
-               background-size: 100% 46px, 46px 100%, auto, auto, auto;
-               color: var(--text);
-               animation: gridDrift 32s linear infinite; }
+      .stApp {
+        background:
+          linear-gradient(var(--grid-line) 1px, transparent 1px),
+          linear-gradient(90deg, var(--grid-line) 1px, transparent 1px),
+          radial-gradient(1200px 700px at 15% -10%, var(--grid-glow-a) 0%, transparent 55%),
+          radial-gradient(1000px 600px at 110% 20%, var(--grid-glow-b) 0%, transparent 50%),
+          var(--bg);
+        background-size: 100% 46px, 46px 100%, auto, auto, auto;
+        color: var(--text);
+        animation: gridDrift 32s linear infinite;
+      }
       @keyframes gridDrift {
         from { background-position: 0 0, 0 0, 0 0, 0 0, 0 0; }
         to   { background-position: 0 460px, 460px 0, 0 0, 0 0, 0 0; }
@@ -122,9 +177,16 @@ st.markdown(
 
       .glass { background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
                padding: 16px 18px; backdrop-filter: blur(14px);
-               box-shadow: 0 10px 40px rgba(0,0,0,.35); }
-      .glass-glow { border-color: var(--border-bright);
-                    box-shadow: 0 0 0 1px rgba(120,190,255,.06), 0 0 34px rgba(34,211,238,.08); }
+               box-shadow: 0 10px 40px var(--shadow); }
+      .glass-glow { border-color: var(--glass-glow-border);
+                    box-shadow: 0 0 0 1px var(--glass-glow-border), 0 0 34px var(--tab-active-bg); }
+      .stack-pair { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:stretch;
+                    margin: 0 0 22px; }
+      .stack-pair > .stack-card { height:100%; margin-bottom:0; padding: 20px 22px;
+                                  display:flex; flex-direction:column; box-sizing:border-box; }
+      .crew-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px 16px; margin: 4px 0 18px; }
+      .crew-grid .crew-agent { margin-bottom:0; min-width:0; }
+      .crew-grid .crew-agent summary { min-width:0; overflow:hidden; }
 
       /* Equal-height cards that wrap instead of squeezing on narrow screens. */
       .sgrid { display:grid; gap:16px; align-items:stretch; margin: 10px 0 22px;
@@ -159,12 +221,40 @@ st.markdown(
       .badge.review { background: linear-gradient(120deg,#fbbf24,#fb923c); }
       .badge.reject { background: linear-gradient(120deg,#fb7185,#ef4444); }
 
-      .chip { display:inline-flex; align-items:center; background: rgba(44,62,110,.35);
-              color:#c8d6f0; border:1px solid rgba(120,150,220,.22); border-radius:999px;
+      .chip { display:inline-flex; align-items:center; background: var(--chip-bg);
+              color: var(--chip-fg); border:1px solid var(--chip-border); border-radius:999px;
               padding:4px 12px; margin:3px 8px 3px 0; font-size:12.5px; line-height:1.25; }
-      .chip.ok { background: rgba(52,211,153,.14); color:#7ff0c6; border-color: rgba(52,211,153,.35); }
-      .chip.warn { background: rgba(251,191,36,.13); color:#ffd98a; border-color: rgba(251,191,36,.35); }
-      .chip.bad { background: rgba(251,113,133,.13); color:#ffb3c1; border-color: rgba(251,113,133,.35); }
+      .chip.ok { background: rgba(52,211,153,.14); color: var(--ok-fg); border-color: rgba(52,211,153,.35); }
+      .chip.warn { background: rgba(251,191,36,.13); color: var(--warn-fg); border-color: rgba(251,191,36,.35); }
+      .chip.bad { background: rgba(251,113,133,.13); color: var(--bad-fg); border-color: rgba(251,113,133,.35); }
+
+      .gap-hint { background: rgba(251,191,36,.10); border:1px solid rgba(251,191,36,.38);
+                  border-radius:16px; padding:14px 16px 14px 18px; margin: 8px 0 4px;
+                  box-shadow: 0 0 0 1px rgba(251,191,36,.06); }
+      .gap-hint .gap-kicker { color: var(--warn-fg); font-size:10.5px; font-weight:700;
+                              letter-spacing:1.6px; text-transform:uppercase; margin-bottom:6px; }
+      .gap-hint .gap-title { font-size:15px; font-weight:700; line-height:1.35; margin-bottom:6px; }
+      .gap-hint .gap-body { color: var(--text-soft); font-size:13.5px; line-height:1.5; }
+      .gap-hint .gap-fix { margin-top:10px; font-size:13.5px; line-height:1.5; color: var(--text-strong); }
+      .gap-hint .gap-fix b { color: var(--warn-fg); }
+      .gap-suggest { margin-top:12px; padding-top:12px; border-top:1px dashed rgba(251,191,36,.35); }
+      .gap-suggest .gs-kicker { color: var(--ok-fg); font-size:10.5px; font-weight:700;
+                                letter-spacing:1.4px; text-transform:uppercase; margin-bottom:6px; }
+      .gap-suggest .gs-key { font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:700;
+                             color: var(--text-strong); }
+      .gap-suggest .gs-title { font-size:14px; margin-top:3px; color: var(--text-strong); }
+      .gap-suggest .gs-why { margin-top:6px; font-size:13px; line-height:1.5; color: var(--text-soft); }
+      .gap-suggest .gs-alts { margin-top:8px; font-size:12.5px; color: var(--muted); }
+      .gap-howto h3 { font-size:16px; margin: 4px 0 8px; }
+      .gap-howto p, .gap-howto li { font-size:14px; line-height:1.55; color: var(--text-soft); }
+      .gap-howto ol { padding-left: 1.2rem; }
+      .gap-howto code { font-family:'JetBrains Mono',monospace; font-size:12px; }
+      div[data-testid="stPopover"] button[kind="secondary"] {
+        width: 42px; height: 42px; min-height: 42px !important; border-radius: 999px !important;
+        font-weight: 800; font-size: 18px; font-style: italic; letter-spacing: 0;
+        border: 1px solid rgba(251,191,36,.45) !important;
+        background: rgba(251,191,36,.16) !important; color: var(--warn-fg) !important;
+      }
 
       .kicker { color: var(--muted); font-size:11px; font-weight:700; letter-spacing:2.5px;
                 text-transform: uppercase; margin: 30px 0 12px; }
@@ -179,33 +269,67 @@ st.markdown(
       .pr-head .title { font-size:17px; font-weight:600; }
       .pr-head .meta { color: var(--muted); font-size:13px; }
 
-      .agent { background: var(--panel); border:1px solid var(--border); border-radius:14px;
-               padding: 14px 18px; margin-bottom: 14px; backdrop-filter: blur(10px);
+      .agent { background: var(--panel); border:1px solid var(--border); border-radius:12px;
+               padding: 0; margin-bottom: 8px; backdrop-filter: blur(10px);
                border-left-width:3px; }
       .agent.ok { border-left-color: var(--green); }
       .agent.warn { border-left-color: var(--amber); }
       .agent.bad { border-left-color: var(--rose); }
-      .agent .role { display:flex; align-items:center; gap:8px; font-weight:600; font-size:14px; }
-      .agent .role .tick { width:8px; height:8px; border-radius:50%; }
+      .agent summary { display:flex; align-items:center; gap:8px; cursor:pointer;
+                       list-style:none; padding: 9px 14px; min-height: 38px;
+                       white-space:nowrap; overflow:hidden; }
+      .agent summary::-webkit-details-marker { display:none; }
+      .agent summary::before,
+      .crew-agent summary::before {
+        content:"";
+        width:12px; height:12px; flex-shrink:0;
+        background-color: currentColor;
+        -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M9 5.5v13l9.5-6.5z'/%3E%3C/svg%3E") center / 11px 11px no-repeat;
+        mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M9 5.5v13l9.5-6.5z'/%3E%3C/svg%3E") center / 11px 11px no-repeat;
+      }
+      .agent[open] summary::before,
+      .crew-agent[open] summary::before { transform: rotate(90deg); }
+      .crew-agent { background: var(--panel); border:1px solid var(--border); border-radius:12px;
+                    padding: 0; margin-bottom: 8px; backdrop-filter: blur(10px); }
+      .crew-agent summary { display:flex; align-items:center; gap:8px; cursor:pointer;
+                            list-style:none; padding: 10px 14px; min-height: 40px;
+                            line-height:1.2; color: var(--text); }
+      .crew-agent summary::-webkit-details-marker { display:none; }
+      .crew-agent .crew-title { font-weight:600; font-size:13.5px; line-height:1.2; }
+      .crew-agent .crew-dot { color: var(--muted); line-height:1; }
+      .crew-agent .crew-id { background: rgba(255,255,255,.06); border-radius:6px;
+                             padding: 2px 7px; font-size:12.5px; line-height:1;
+                             display:inline-flex; align-items:center;
+                             color: var(--text-code); font-family:'JetBrains Mono', monospace; }
+      .crew-agent .crew-body { padding: 2px 14px 12px 36px; color: var(--muted);
+                               font-size:13px; line-height:1.45; }
+      .agent .role { display:flex; align-items:center; gap:8px; font-weight:600; font-size:13px;
+                     flex-shrink:0; min-width: 118px; }
+      .agent .role .tick { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
       .agent.ok .tick { background: var(--green); box-shadow:0 0 8px var(--green); }
       .agent.warn .tick { background: var(--amber); box-shadow:0 0 8px var(--amber); }
       .agent.bad .tick { background: var(--rose); box-shadow:0 0 8px var(--rose); }
-      .agent .out { color:#b7c4de; font-size:12.5px; margin-top:6px; white-space:pre-wrap;
+      .agent .one { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis;
+                    white-space:nowrap; color: var(--text-code); font-size:12.5px;
                     font-family:'JetBrains Mono', monospace; }
+      .agent .out { color: var(--text-code); font-size:12.5px; margin: 0 14px 10px;
+                    padding-top: 2px; border-top:1px solid var(--border);
+                    white-space:pre-wrap; font-family:'JetBrains Mono', monospace;
+                    line-height:1.45; max-height: 220px; overflow:auto; }
 
       .chain { display:flex; align-items:center; flex-wrap:wrap; gap:10px;
                 margin: 6px 0 18px; }
-      .chain .hop { background: rgba(44,62,110,.35); border:1px solid var(--border);
+      .chain .hop { background: var(--hop-bg); border:1px solid var(--border);
                     border-radius:12px; padding:7px 14px; font-weight:600; font-size:13.5px; }
-      .chain .hop.ok { border-color: rgba(52,211,153,.5); color:#7ff0c6; }
-      .chain .hop.warn { border-color: rgba(251,191,36,.5); color:#ffd98a; }
-      .chain .hop.bad { border-color: rgba(251,113,133,.5); color:#ffb3c1; }
+      .chain .hop.ok { border-color: rgba(52,211,153,.5); color: var(--ok-fg); }
+      .chain .hop.warn { border-color: rgba(251,191,36,.5); color: var(--warn-fg); }
+      .chain .hop.bad { border-color: rgba(251,113,133,.5); color: var(--bad-fg); }
       .chain .hop.dist { font-weight:400; font-size:11px; opacity:.7; }
       .chain .arr { color: var(--muted); font-weight:700; }
 
-      .provenance { border:1px dashed rgba(120,190,255,.28); border-radius:14px;
-                    padding: 16px 20px; background: rgba(13,27,58,.25); margin-bottom: 8px; }
-      .provenance .q { color:#8fb7dd; font-size:12px; font-family:'JetBrains Mono',monospace;
+      .provenance { border:1px dashed var(--border-bright); border-radius:14px;
+                    padding: 16px 20px; background: var(--provenance-bg); margin-bottom: 8px; }
+      .provenance .q { color: var(--accent-tag); font-size:12px; font-family:'JetBrains Mono',monospace;
                        margin:4px 0; white-space:pre-wrap; }
       .provenance .qline { color: var(--muted); font-size:11.5px; margin-top:6px; }
 
@@ -220,10 +344,36 @@ st.markdown(
 
       div[data-testid="stExpander"] { background: var(--panel); border:1px solid var(--border);
                                       border-radius:12px; }
-      div[data-testid="stExpander"] summary { font-weight:600; }
+      div[data-testid="stExpander"] details > summary {
+        font-weight:600;
+        display:flex !important;
+        align-items:center !important;
+      }
+      div[data-testid="stExpander"] summary > span {
+        display:flex !important;
+        align-items:center !important;
+      }
+      div[data-testid="stExpander"] summary > span > *:first-child {
+        display:inline-flex !important;
+        align-items:center !important;
+        justify-content:center !important;
+        line-height:1 !important;
+        margin:0 !important;
+        transform: translateY(1px);
+      }
+      div[data-testid="stExpander"] summary [data-testid="stMarkdownContainer"],
+      div[data-testid="stExpander"] summary [data-testid="stMarkdownContainer"] p,
+      div[data-testid="stExpander"] summary p {
+        margin:0 !important;
+        line-height:1.3 !important;
+      }
+      div[data-testid="stExpander"] summary code {
+        line-height:1.3 !important;
+        vertical-align:middle;
+      }
       .stTabs [data-baseweb="tab-list"] { gap: 6px; }
       .stTabs [data-baseweb="tab"] { border-radius: 10px 10px 0 0; }
-      .stTabs [aria-selected="true"] { background: rgba(34,211,238,.1); }
+      .stTabs [aria-selected="true"] { background: var(--tab-active-bg); }
 
       [data-testid="stDataFrame"] { border:1px solid var(--border); border-radius:12px;
                                     overflow:hidden; }
@@ -270,7 +420,7 @@ st.markdown(
       button[kind="primary"]:hover { filter: brightness(1.08); }
       [data-testid="stButton"] button:not([kind="primary"]),
       [data-testid="stFormSubmitButton"] button:not([kind="primary"]) {
-        background: rgba(13, 19, 33, 0.88) !important;
+        background: var(--btn-secondary-bg) !important;
         color: var(--text) !important;
         border: 1px solid var(--border-bright) !important;
       }
@@ -285,8 +435,8 @@ st.markdown(
       /* ---------- futuristic telemetry deck ---------- */
       .panel { position:relative; border:1px solid var(--border); border-radius:18px;
                padding:18px 20px 16px; margin-bottom:20px; overflow:hidden;
-               background: linear-gradient(160deg, rgba(19,28,50,.92), rgba(9,14,26,.78));
-               box-shadow: 0 14px 44px rgba(0,0,0,.45);
+               background: linear-gradient(160deg, var(--panel), var(--panel-solid));
+               box-shadow: 0 14px 44px var(--shadow-deep);
                animation: riseIn .65s cubic-bezier(.2,.8,.2,1) both; }
       /* travelling scanline along the top edge */
       .panel::after { content:""; position:absolute; top:0; left:0; width:45%; height:1px;
@@ -308,7 +458,7 @@ st.markdown(
       .panel-sub { color:var(--muted); font-size:11.5px; min-width:0; line-height:1.35; }
       .panel-tag { margin-left:auto; flex:0 0 auto; font-size:10px; font-weight:700;
                    letter-spacing:1.4px; line-height:1.2;
-                   text-transform:uppercase; color:#8fb7dd; border:1px solid var(--border);
+                   text-transform:uppercase; color: var(--accent-tag); border:1px solid var(--border);
                    border-radius:999px; padding:5px 10px; display:inline-flex; align-items:center; }
       /* Body fills the leftover height so charts centre and panel floors line up. */
       .panel-body { flex:1 1 auto; min-width:0; display:flex; flex-direction:column;
@@ -323,25 +473,28 @@ st.markdown(
       .pgrid.r-narrow-wide { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }
 
       .gauge-wrap { display:flex; justify-content:center; }
-      .gauge { width:100%; max-width:250px; overflow:visible; }
-      .gauge .gnum { font-family:'Plus Jakarta Sans',sans-serif; font-weight:700; font-size:46px;
-                     fill:#eef4ff; }
-      .gauge .gsuf { font-family:'Plus Jakarta Sans',sans-serif; font-weight:600; font-size:17px;
-                     fill:#7a8ba8; baseline-shift: super; }
+      .gauge { width:100%; max-width:280px; overflow:visible; }
+      .gauge .gnum { font-family:'Plus Jakarta Sans',sans-serif; font-weight:700; font-size:32px;
+                     fill: var(--text-strong); }
+      .gauge .gsuf { font-family:'Plus Jakarta Sans',sans-serif; font-weight:600; font-size:15px;
+                     fill: var(--muted); baseline-shift: super; }
       .gauge .gcap { font-family:'Plus Jakarta Sans',sans-serif; font-weight:600; font-size:10px;
-                     fill:#7a8ba8; letter-spacing:1.6px; }
+                     fill: var(--muted); letter-spacing:1.6px; }
+      .gauge .glabel { font-family:'Plus Jakarta Sans',sans-serif; font-weight:600; font-size:8.5px;
+                       fill: var(--muted); }
+      .gauge .gneedle { fill: #d4d4d8; filter: drop-shadow(0 1px 2px rgba(0,0,0,.35)); }
+      .gauge .ghub { fill: #f4f4f5; stroke-width: 2; }
       @keyframes gaugeFill { from { stroke-dashoffset: var(--dash-len); }
                              to   { stroke-dashoffset: var(--dash-off); } }
       .gauge .val { animation: gaugeFill 1.35s cubic-bezier(.2,.8,.2,1) both,
                                ringBreathe 3.4s ease-in-out 1.35s infinite; }
       @keyframes ringBreathe { 0%,100% { opacity:1; } 50% { opacity:.74; } }
-      /* breathing halo behind the readout */
       .gauge .ghalo { transform-box: fill-box; transform-origin: center;
                       animation: haloPulse 3.6s ease-in-out infinite; }
-      @keyframes haloPulse { 0%,100% { opacity:.15; transform: scale(1); }
-                             50%     { opacity:.05; transform: scale(1.1); } }
-      /* marker riding the tip of the value arc */
+      @keyframes haloPulse { 0%,100% { opacity:.18; transform: scale(1); }
+                             50%     { opacity:.06; transform: scale(1.1); } }
       .gauge .gtip { transform-box: fill-box; transform-origin: center;
+                     fill: #fecaca;
                      animation: tipPulse 1.9s ease-in-out .9s infinite; }
       .gauge .gtip-halo { transform-box: fill-box; transform-origin: center;
                           animation: tipRing 1.9s ease-out .9s infinite; }
@@ -353,9 +506,9 @@ st.markdown(
 
       .cb { display:flex; align-items:flex-end; gap:10px; }
       .cb-item { flex:1; min-width:0; text-align:center; }
-      .cb-val { font-size:13px; font-weight:700; color:#dce6fa; margin-bottom:5px; }
+      .cb-val { font-size:13px; font-weight:700; color: var(--cb-val); margin-bottom:5px; }
       .cb-track { position:relative; height:104px; border-radius:9px;
-                  background: rgba(120,150,220,.08); overflow:hidden; }
+                  background: var(--cb-track); overflow:hidden; }
       .panel.tall .cb-track { height:150px; }
       .cb-fill { position:absolute; left:0; right:0; bottom:0; border-radius:9px; overflow:hidden;
                  animation: barGrow 1.05s cubic-bezier(.2,.8,.2,1) both; }
@@ -371,9 +524,9 @@ st.markdown(
       .mt { margin-bottom:14px; }
       .mt:last-child { margin-bottom:0; }
       .mt-top { display:flex; justify-content:space-between; align-items:baseline;
-                font-size:12.5px; margin-bottom:5px; color:#c8d6f0; gap:10px; }
-      .mt-top b { color:#eef4ff; font-family:'JetBrains Mono',monospace; font-size:12px; }
-      .mt-track { height:8px; border-radius:999px; background: rgba(120,150,220,.1); overflow:hidden; }
+                font-size:12.5px; margin-bottom:5px; color: var(--text-soft); gap:10px; }
+      .mt-top b { color: var(--text-strong); font-family:'JetBrains Mono',monospace; font-size:12px; }
+      .mt-track { height:8px; border-radius:999px; background: var(--mt-track); overflow:hidden; }
       .mt-fill { position:relative; height:100%; border-radius:999px; overflow:hidden;
                  animation: mtGrow 1.15s cubic-bezier(.2,.8,.2,1) both; }
       @keyframes mtGrow { from { width:0; } }
@@ -390,7 +543,7 @@ st.markdown(
       @keyframes drawLine { from { stroke-dashoffset: var(--len); } to { stroke-dashoffset: 0; } }
       .spark .sarea { animation: fadeIn .9s ease-out 1.1s both; }
       @keyframes fadeIn { from { opacity:0; } }
-      .spark .sdot { stroke:#0b1120; stroke-width:2; transform-box: fill-box;
+      .spark .sdot { stroke: var(--spark-dot-stroke); stroke-width:2; transform-box: fill-box;
                      transform-origin: center;
                      animation: fadeIn .4s 1.5s both, tipPulse 2s ease-in-out 1.6s infinite; }
       .spark .sdot-halo { transform-box: fill-box; transform-origin: center;
@@ -404,7 +557,7 @@ st.markdown(
       /* continuously scrolling telemetry strip */
       .ticker { position:relative; overflow:hidden; margin:16px 0 22px; padding:11px 0;
                 border:1px solid var(--border); border-radius:12px;
-                background: rgba(9,14,26,.6);
+                background: var(--ticker-bg);
                 mask-image: linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent);
                 -webkit-mask-image: linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent); }
       .ticker-track { display:inline-flex; white-space:nowrap; will-change:transform;
@@ -412,8 +565,8 @@ st.markdown(
       .ticker:hover .ticker-track { animation-play-state: paused; }
       @keyframes tickerRoll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
       .tk { display:inline-flex; align-items:center; gap:8px; padding:0 22px;
-            font-size:12.5px; color:#c8d6f0; }
-      .tk b { font-family:'JetBrains Mono',monospace; font-size:12px; color:#eef4ff; }
+            font-size:12.5px; color: var(--text-soft); }
+      .tk b { font-family:'JetBrains Mono',monospace; font-size:12px; color: var(--text-strong); }
       .tk i { width:7px; height:7px; border-radius:50%; background:var(--cyan);
               box-shadow:0 0 9px var(--cyan); animation: pulse 2.2s infinite; }
       .tk.ok i { background:var(--green); box-shadow:0 0 9px var(--green); }
@@ -460,18 +613,18 @@ st.markdown(
       .verdict-panel .badge { font-size:22px; padding:10px 30px; border-radius:14px; }
       .verdict-panel .vlabel { color:var(--muted); font-size:10.5px; letter-spacing:2.2px;
                                text-transform:uppercase; line-height:1.2; margin-bottom:4px; }
-      .verdict-panel .vsub { color:#c8d6f0; font-size:13px; }
+      .verdict-panel .vsub { color: var(--text-soft); font-size:13px; }
 
       .conn-card { background: var(--panel); border:1px solid var(--border); border-radius:18px;
                    padding: 18px 20px 16px; backdrop-filter: blur(14px); margin-bottom: 12px;
-                   box-shadow: 0 10px 40px rgba(0,0,0,.35); position:relative; overflow:hidden;
+                   box-shadow: 0 10px 40px var(--shadow); position:relative; overflow:hidden;
                    min-height: 205px; display:flex; flex-direction:column; }
       .conn-card::before { content:""; position:absolute; inset:0 auto 0 0; width:3px; }
       .conn-card.ok::before { background: var(--green); }
       .conn-card.warn::before { background: var(--amber); }
       .conn-card.bad::before { background: var(--rose); }
       .conn-card.ok { border-color: rgba(52,211,153,.28);
-                      box-shadow: 0 0 0 1px rgba(52,211,153,.08), 0 10px 40px rgba(0,0,0,.35); }
+                      box-shadow: 0 0 0 1px rgba(52,211,153,.08), 0 10px 40px var(--shadow); }
       .conn-head { display:flex; align-items:center; gap:12px; margin-bottom: 12px; }
       .conn-glyph { width:42px; height:42px; border-radius:12px; display:flex; align-items:center;
                     justify-content:center; flex-shrink:0; }
@@ -485,22 +638,22 @@ st.markdown(
       .conn-pill { margin-left:auto; border-radius:999px; padding:5px 12px; font-size:11px;
                    font-weight:700; letter-spacing:.8px; line-height:1.1;
                    text-transform:uppercase; display:inline-flex; align-items:center; white-space:nowrap; }
-      .conn-pill.ok { background: rgba(52,211,153,.16); color:#7ff0c6; border:1px solid rgba(52,211,153,.35); }
-      .conn-pill.warn { background: rgba(251,191,36,.14); color:#ffd98a; border:1px solid rgba(251,191,36,.35); }
-      .conn-pill.bad { background: rgba(251,113,133,.14); color:#ffb3c1; border:1px solid rgba(251,113,133,.35); }
+      .conn-pill.ok { background: rgba(52,211,153,.16); color: var(--ok-fg); border:1px solid rgba(52,211,153,.35); }
+      .conn-pill.warn { background: rgba(251,191,36,.14); color: var(--warn-fg); border:1px solid rgba(251,191,36,.35); }
+      .conn-pill.bad { background: rgba(251,113,133,.14); color: var(--bad-fg); border:1px solid rgba(251,113,133,.35); }
       .conn-headline { font-size:20px; font-weight:700; letter-spacing:-.3px; margin: 2px 0 10px;
                        background: var(--grad); -webkit-background-clip:text; background-clip:text;
                        -webkit-text-fill-color:transparent; }
       .conn-facts { display:grid; grid-template-columns: 1fr 1fr; gap:8px 14px; margin-bottom: 12px; }
       .conn-fact .k { color: var(--muted); font-size:10px; letter-spacing:1.2px; text-transform:uppercase; }
-      .conn-fact .v { font-size:13px; margin-top:2px; color:#d5def0; }
-      .term { font-family:'JetBrains Mono', monospace; font-size:11.5px; color:#9ec9ea;
-              background: rgba(7,14,28,.55); border:1px dashed rgba(120,190,255,.22);
+      .conn-fact .v { font-size:13px; margin-top:2px; color: var(--conn-fact-v); }
+      .term { font-family:'JetBrains Mono', monospace; font-size:11.5px; color: var(--term-fg);
+              background: var(--term-bg); border:1px dashed var(--border-bright);
               border-radius:10px; padding:8px 12px; overflow:auto; white-space:nowrap; }
-      .conn-err { margin-top:10px; color:#ffb3c1; font-size:12.5px; }
+      .conn-err { margin-top:10px; color: var(--bad-fg); font-size:12.5px; }
 
       .stTextInput input, .stSelectbox [data-baseweb="select"] > div {
-        background: rgba(7,14,28,.55) !important; border-radius:10px !important;
+        background: var(--input-bg) !important; border-radius:10px !important;
       }
       [data-testid="stToggle"] label,
       [data-testid="stSelectbox"] label,
@@ -549,8 +702,8 @@ GLOSSARY = {
     "Customer flows": "End-to-end customer journeys that touch at-risk services.",
     "Tests": "Automated tests covering files owned by that service.",
     "Past incidents": "Incidents previously logged against the service.",
-    "Safe-to-merge score": "How safe AEGIS thinks it is to merge this PR (higher = safer to ship).",
-    "Breakage likelihood": "Estimated chance this change breaks something in production (higher = riskier).",
+    "Safe-to-merge score": "min(98%, 100% − Risk Score). Higher means safer to ship.",
+    "Risk Score": "Sum of PR Reviewer + Security + Blast Radius + Risk Analyzer + Test Selector, capped at 98%.",
     "Alignment": "Whether changed files match the Jira stories they claim to implement.",
     "Story epic": "The business capability a Jira story belongs to (Payments, Commerce, Platform).",
     "RELEASED_IN": "Relationship between a microservice and the release version it shipped in.",
@@ -592,7 +745,7 @@ def status_rows_html(title, rows) -> str:
             f"<span>{html_escape(str(label))}</span>{chip}</div>"
         )
     return (
-        f'<div class="glass glass-glow" style="margin-bottom:16px">'
+        f'<div class="glass glass-glow stack-card">'
         f'<div style="font-weight:600;margin-bottom:8px">{html_escape(title)}</div>'
         f"{''.join(parts)}</div>"
     )
@@ -608,14 +761,24 @@ def stat_html(label: str, value: str, delta: str = "", accent: bool = False) -> 
 
 RAMPS = {
     "info": ("#22d3ee", "#a78bfa"),
-    "ok": ("#34d399", "#22d3ee"),
+    "ok": ("#059669", "#34d399"),
     "warn": ("#fbbf24", "#fb923c"),
-    "bad": ("#fb7185", "#ef4444"),
+    "bad": ("#9f1239", "#ef4444"),
     "violet": ("#a78bfa", "#f472b6"),
+    "red": ("#9f1239", "#ef4444"),
 }
-GAUGE_START = 135.0
-GAUGE_SWEEP = 270.0
-GAUGE_RADIUS = 72.0
+GAUGE_THEME = {
+    "ok": ("rgba(6,78,59,.45)", "rgba(16,185,129,.32)", "#047857"),
+    "red": ("rgba(127,29,29,.45)", "rgba(180,60,70,.28)", "#9f1239"),
+    "bad": ("rgba(127,29,29,.45)", "rgba(180,60,70,.28)", "#9f1239"),
+    "warn": ("rgba(120,53,15,.45)", "rgba(251,191,36,.30)", "#b45309"),
+}
+GAUGE_START = 150.0
+GAUGE_SWEEP = 240.0
+GAUGE_RADIUS = 70.0
+GAUGE_CX, GAUGE_CY = 110.0, 118.0
+# Equal visual spacing (speed-test style): low values stretched, high values compressed.
+GAUGE_TICKS = (0, 5, 10, 20, 35, 50, 70, 85, 100)
 _uid_counter = itertools.count()
 
 
@@ -641,6 +804,19 @@ def _arc_path(cx: float, cy: float, radius: float, start: float, end: float) -> 
     return f"M {x1:.2f} {y1:.2f} A {radius:.2f} {radius:.2f} 0 {large} 1 {x2:.2f} {y2:.2f}"
 
 
+def _gauge_frac(value: float) -> float:
+    """Map 0–100 onto the dial with non-linear (speed-test) spacing."""
+    v = max(0.0, min(100.0, float(value)))
+    ticks = GAUGE_TICKS
+    span = float(len(ticks) - 1)
+    for i in range(1, len(ticks)):
+        lo, hi = float(ticks[i - 1]), float(ticks[i])
+        if v <= hi:
+            t = 0.0 if hi == lo else (v - lo) / (hi - lo)
+            return (i - 1 + t) / span
+    return 1.0
+
+
 def gauge_html(
     percent: float,
     caption: str,
@@ -650,57 +826,83 @@ def gauge_html(
     variant: str | None = None,
     foot: str = "",
 ) -> str:
-    """Radial arc gauge: animated value ring, tick bezel and centred readout."""
-    pct = max(0.0, min(float(percent) / 100.0, 1.0))
-    start, stop = RAMPS.get(variant or score_variant(pct * 100), RAMPS["info"])
+    """Non-linear 0–100 radial gauge (speed-test layout, needle)."""
+    key = variant if variant in RAMPS else "red"
+    frac = _gauge_frac(percent)
+    start, stop = RAMPS[key]
+    track_stroke, tick_off, hub = GAUGE_THEME.get(key, GAUGE_THEME["red"])
     uid = f"gg{next(_uid_counter)}"
-    track = _arc_path(100, 100, GAUGE_RADIUS, GAUGE_START, GAUGE_START + GAUGE_SWEEP)
-    length = 2 * math.pi * GAUGE_RADIUS * (GAUGE_SWEEP / 360.0)
-    offset = length * (1.0 - pct)
+    cx, cy, radius = GAUGE_CX, GAUGE_CY, GAUGE_RADIUS
+    track = _arc_path(cx, cy, radius, GAUGE_START, GAUGE_START + GAUGE_SWEEP)
+    length = 2 * math.pi * radius * (GAUGE_SWEEP / 360.0)
+    offset = length * (1.0 - frac)
+    angle = GAUGE_START + GAUGE_SWEEP * frac
 
     ticks = []
-    for i in range(28):
-        frac = i / 27.0
-        degrees = GAUGE_START + GAUGE_SWEEP * frac
-        x1, y1 = _polar(100, 100, GAUGE_RADIUS + 12, degrees)
-        x2, y2 = _polar(100, 100, GAUGE_RADIUS + 17, degrees)
-        lit = frac <= pct
-        color = stop if lit else "rgba(120,150,220,.22)"
+    n_major = len(GAUGE_TICKS)
+    for i, label in enumerate(GAUGE_TICKS):
+        degrees = GAUGE_START + GAUGE_SWEEP * (i / (n_major - 1))
+        x1, y1 = _polar(cx, cy, radius + 8, degrees)
+        x2, y2 = _polar(cx, cy, radius + 16, degrees)
+        lx, ly = _polar(cx, cy, radius + 26, degrees)
+        lit = i / (n_major - 1) <= frac + 1e-9
+        color = stop if lit else tick_off
         ticks.append(
             f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
-            f'stroke="{color}" stroke-width="2" stroke-linecap="round" '
-            f'opacity="{"0.85" if lit else "1"}"/>'
+            f'stroke="{color}" stroke-width="2.4" stroke-linecap="round"/>'
         )
+        ticks.append(
+            f'<text class="glabel" x="{lx:.1f}" y="{ly:.1f}" text-anchor="middle" '
+            f'dominant-baseline="middle">{label}</text>'
+        )
+        if i < n_major - 1:
+            for k in (1, 2):
+                minor = GAUGE_START + GAUGE_SWEEP * ((i + k / 3) / (n_major - 1))
+                mx1, my1 = _polar(cx, cy, radius + 8, minor)
+                mx2, my2 = _polar(cx, cy, radius + 12, minor)
+                ticks.append(
+                    f'<line x1="{mx1:.1f}" y1="{my1:.1f}" x2="{mx2:.1f}" y2="{my2:.1f}" '
+                    f'stroke="{tick_off}" stroke-width="1.4" '
+                    f'stroke-linecap="round"/>'
+                )
 
+    tip_x, tip_y = _polar(cx, cy, radius, angle)
+    nx, ny = _polar(cx, cy, radius - 6, angle)
+    tail_x, tail_y = _polar(cx, cy, 10, angle + 180)
+    b1x, b1y = _polar(cx, cy, 3.2, angle + 90)
+    b2x, b2y = _polar(cx, cy, 3.2, angle - 90)
     readout = display if display is not None else f"{float(percent):.0f}"
-    tip_x, tip_y = _polar(100, 100, GAUGE_RADIUS, GAUGE_START + GAUGE_SWEEP * pct)
     return (
-        '<div class="gauge-wrap"><svg class="gauge" viewBox="0 0 200 176" '
+        '<div class="gauge-wrap"><svg class="gauge" viewBox="0 0 220 210" '
         'xmlns="http://www.w3.org/2000/svg">'
         f'<defs><linearGradient id="{uid}" x1="0" y1="1" x2="1" y2="0">'
         f'<stop offset="0" stop-color="{start}"/><stop offset="1" stop-color="{stop}"/>'
         f'</linearGradient>'
         f'<radialGradient id="{uid}h">'
-        f'<stop offset="0" stop-color="{stop}" stop-opacity=".55"/>'
+        f'<stop offset="0" stop-color="{stop}" stop-opacity=".5"/>'
         f'<stop offset="1" stop-color="{stop}" stop-opacity="0"/>'
         f'</radialGradient>'
         f'<filter id="{uid}b" x="-30%" y="-30%" width="160%" height="160%">'
-        f'<feGaussianBlur stdDeviation="5" result="blur"/>'
+        f'<feGaussianBlur stdDeviation="4.5" result="blur"/>'
         f'<feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>'
         f'</filter></defs>'
-        f'<circle class="ghalo" cx="100" cy="100" r="58" fill="url(#{uid}h)"/>'
+        f'<circle class="ghalo" cx="{cx:.0f}" cy="{cy:.0f}" r="52" fill="url(#{uid}h)"/>'
         f"{''.join(ticks)}"
-        f'<path d="{track}" fill="none" stroke="rgba(120,150,220,.13)" '
-        f'stroke-width="13" stroke-linecap="round"/>'
-        f'<path class="val" d="{track}" fill="none" stroke="url(#{uid})" stroke-width="13" '
+        f'<path class="gauge-track" d="{track}" fill="none" '
+        f'stroke="{track_stroke}" stroke-width="14" stroke-linecap="round"/>'
+        f'<path class="val" d="{track}" fill="none" stroke="url(#{uid})" stroke-width="14" '
         f'stroke-linecap="round" filter="url(#{uid}b)" '
         f'stroke-dasharray="{length:.2f}" stroke-dashoffset="{offset:.2f}" '
         f'style="--dash-len:{length:.2f};--dash-off:{offset:.2f}"/>'
         f'<circle class="gtip-halo" cx="{tip_x:.2f}" cy="{tip_y:.2f}" r="7" fill="{stop}"/>'
-        f'<circle class="gtip" cx="{tip_x:.2f}" cy="{tip_y:.2f}" r="4" fill="#eef4ff"/>'
-        f'<text class="gnum" x="100" y="99" text-anchor="middle">{html_escape(readout)}'
+        f'<polygon class="gneedle" points="'
+        f'{nx:.1f},{ny:.1f} {b1x:.1f},{b1y:.1f} {tail_x:.1f},{tail_y:.1f} {b2x:.1f},{b2y:.1f}"/>'
+        f'<circle class="ghub" cx="{cx:.0f}" cy="{cy:.0f}" r="6.5" '
+        f'style="stroke:{hub}"/>'
+        f'<text class="gnum" x="{cx:.0f}" y="{cy + 48:.0f}" text-anchor="middle">'
+        f'{html_escape(readout)}'
         f'<tspan class="gsuf" dx="3" dy="-0.15em">{html_escape(suffix)}</tspan></text>'
-        f'<text class="gcap" x="100" y="124" text-anchor="middle">'
+        f'<text class="gcap" x="{cx:.0f}" y="{cy + 66:.0f}" text-anchor="middle">'
         f'{html_escape(caption)}</text>'
         '</svg></div>'
         + (f'<div class="gauge-foot">{html_escape(foot)}</div>' if foot else "")
@@ -851,52 +1053,82 @@ def stats_grid_html(items: list[tuple]) -> str:
     return f'<div class="sgrid">{"".join(cells)}</div>' if cells else ""
 
 
-def agent_nodes(report: AegisReport) -> list[tuple[str, str, str]]:
-    """(role_short, output_text, variant) for the agent output diagram."""
-    raw = report.agent_outputs.get("raw", {})
+def _one_line(text: str, limit: int = 110) -> str:
+    """First non-empty line, collapsed whitespace, truncated for the closed row."""
+    line = ""
+    for raw in (text or "").splitlines():
+        line = re.sub(r"\s+", " ", raw).strip()
+        if line:
+            break
+    if len(line) > limit:
+        return line[: limit - 1] + "…"
+    return line or "—"
+
+
+def _compact_body(text: str, *, limit: int = 800) -> str:
+    """Keep expanded agent text short: drop blank runs, cap length."""
+    lines = [re.sub(r"\s+", " ", line).strip() for line in (text or "").splitlines()]
+    kept = [line for line in lines if line]
+    body = "\n".join(kept)
+    if len(body) > limit:
+        return body[: limit - 1] + "…"
+    return body
+
+
+def agent_nodes(report: AegisReport) -> list[tuple[str, str, str, str]]:
+    """(role_short, one_line, detail, variant) for the collapsible agent list."""
+    raw = report.agent_outputs.get("raw", {}) or {}
     nodes = []
 
     alignment = report.agent_outputs.get("alignment") or report.story_alignment.get("alignment", "GAPS")
-    text = raw.get("PR Compliance Reviewer") or (
-        f"ALIGNMENT={alignment}\n"
-        f"Deterministic check of {len(report.story_alignment.get('files', []))} changed file(s) vs story epics."
-    )
-    nodes.append(("PR Reviewer", text.strip(), "ok" if alignment == "ALIGNED" else "bad"))
+    review_line = f"ALIGNMENT={alignment}"
+    review_body = _compact_body(raw.get("PR Compliance Reviewer") or "")
+    nodes.append(("PR Reviewer", review_line, review_body, "ok" if alignment == "ALIGNED" else "bad"))
 
     security = report.agent_outputs.get("security") or "PASS"
-    text = raw.get("Security Analyst") or f"SECURITY={security}"
     security_variant = {"PASS": "ok", "REVIEW": "warn", "FAIL": "bad"}.get(security, "warn")
-    nodes.append(("Security", text.strip(), security_variant))
+    sec_body = _compact_body(raw.get("Security Analyst") or "")
+    nodes.append(("Security", f"SECURITY={security}", sec_body, security_variant))
 
-    radius = report.blast_radius
-    affected = radius.get("affected_services", [])
-    text = raw.get("Blast Radius Analyst") or (
-        f"AFFECTED={len(affected)}\n" + ", ".join(affected) or "no services mapped"
+    radius = report.blast_radius or {}
+    affected = radius.get("affected_services", []) or []
+    blast_line = f"{len(affected)} service(s)" + (f" · {', '.join(affected[:4])}" if affected else "")
+    blast_body = _compact_body(raw.get("Blast Radius Analyst") or "")
+    nodes.append(("Blast Radius", blast_line, blast_body, "warn"))
+
+    risk_line = (
+        f"risk score {report.regression_probability:.0%} · "
+        f"confidence {report.merge_confidence:.0f}"
     )
-    nodes.append(("Blast Radius", text.strip(), "warn"))
+    risk_body = _compact_body(raw.get("Risk Analyzer") or "")
+    nodes.append(("Risk Analyzer", risk_line, risk_body, "warn"))
 
-    text = raw.get("Risk Analyzer") or (
-        f"REGRESSION_PROBABILITY={report.regression_probability:.3f}\n"
-        f"MERGE_CONFIDENCE={report.merge_confidence:.1f}"
+    tests = [t.get("id") for t in report.recommended_tests if t.get("id")]
+    test_line = f"{len(tests)} test(s) selected"
+    test_body = _compact_body(
+        raw.get("Test Selector") or (", ".join(tests) if tests else "")
     )
-    nodes.append(("Risk Analyzer", text.strip(), "warn"))
+    nodes.append(("Test Selector", test_line, test_body, "ok"))
 
-    tests = ", ".join(t["id"] for t in report.recommended_tests) or "none"
-    text = raw.get("Test Selector") or f"SELECTED {len(report.recommended_tests)}: {tests}"
-    nodes.append(("Test Selector", text.strip(), "ok"))
-
-    text = raw.get("AEGIS Release Orchestrator") or f"VERDICT={report.verdict}"
-    nodes.append(("Orchestrator", text.strip(), report.verdict.lower()))
+    verdict_variant = {"APPROVE": "ok", "REVIEW": "warn", "REJECT": "bad"}.get(report.verdict, "warn")
+    orch_body = _compact_body(raw.get("AEGIS Release Orchestrator") or "")
+    nodes.append(("Orchestrator", f"VERDICT={report.verdict}", orch_body, verdict_variant))
 
     return nodes
 
 
 def agent_diagram_html(report: AegisReport) -> str:
     blocks = []
-    for role, out, variant in agent_nodes(report):
+    for role, line, detail, variant in agent_nodes(report):
+        extra = ""
+        if detail and _one_line(detail) != line:
+            extra = f'<div class="out">{html_escape(detail)}</div>'
         blocks.append(
-            f'<div class="agent {variant}"><div class="role"><span class="tick"></span>{role}</div>'
-            f'<div class="out">{out}</div></div>'
+            f'<details class="agent {variant}">'
+            f'<summary>'
+            f'<span class="role"><span class="tick"></span>{html_escape(role)}</span>'
+            f'<span class="one">{html_escape(line)}</span>'
+            f'</summary>{extra}</details>'
         )
     return "".join(blocks)
 
@@ -918,6 +1150,38 @@ def blast_chain_html(report: AegisReport) -> str:
         if i < len(ordered) - 1:
             parts.append('<span class="arr">→</span>')
     return '<div class="chain">' + "".join(parts) + "</div>"
+
+
+def risk_score_formula_markdown() -> str:
+    """Published Risk Score formula for the numbers glossary."""
+    gap = f"{GAP_RISK:.0%}"
+    review = f"{SECURITY_REVIEW_RISK:.0%}"
+    fail = f"{SECURITY_FAIL_RISK:.0%}"
+    extra = f"{BLAST_EXTRA_SERVICE:.0%}"
+    flow = f"{BLAST_FLOW_RISK:.0%}"
+    incident = f"{BLAST_INCIDENT_RISK:.0%}"
+    churn = f"{RISK_CHURN_CAP:.0%}"
+    llm = f"{LLM_RISK_WEIGHT:.0%}"
+    uncovered = f"{TEST_UNCOVERED_RISK:.0%}"
+    none = f"{TEST_NONE_RISK:.0%}"
+    cap = f"{SCORE_MAX:.0%}"
+    conf_cap = f"{CONFIDENCE_MAX:.0f}%"
+    return (
+        "**Risk Score** is a formula, not a free-form model guess.\n\n"
+        f"`Risk Score = min({cap}, PR Reviewer + Security + Blast Radius + "
+        "Risk Analyzer + Test Selector)`\n\n"
+        f"- **PR Reviewer:** {gap} × share of changed files that do not match the Jira story\n"
+        f"- **Security:** {review} if REVIEW, {fail} if FAIL\n"
+        f"- **Blast Radius:** {extra} per extra service, {flow} if a customer flow is hit, "
+        f"{incident} per past incident\n"
+        f"- **Risk Analyzer:** up to {churn} from code churn; plus {llm} × the model's "
+        "regression number when agents are on\n"
+        f"- **Test Selector:** {uncovered} × uncovered files; {none} more if no tests were selected\n\n"
+        f"**Safe-to-merge score** = `min({conf_cap}, 100% − Risk Score)`\n\n"
+        "A Risk Score **above 1%** cannot be APPROVE. "
+        "The Orchestrator turns this into APPROVE / REVIEW / REJECT. "
+        "Deployment Advisor is release-only and is not in this formula."
+    )
 
 
 def provenance_html(report: AegisReport) -> str:
@@ -950,9 +1214,161 @@ def provenance_html(report: AegisReport) -> str:
     )
 
 
-@st.cache_data(show_spinner=False, ttl=600)
+def _unique(values: list[str]) -> list[str]:
+    seen: list[str] = []
+    for value in values:
+        if value and value not in seen:
+            seen.append(value)
+    return seen
+
+
+def friendly_file_reason(file_row: dict, stories: list[dict]) -> str:
+    domain = (file_row.get("domain") or "unknown").strip()
+    if file_row.get("aligned"):
+        return f"matches the Jira epic ({domain})"
+    if not stories:
+        return "this PR has no Jira ticket linked"
+    epics = _unique([str(s.get("epic") or "unspecified") for s in stories])
+    keys = _unique([str(s.get("key") or "") for s in stories])
+    ticket = ", ".join(keys) if keys else "the linked ticket"
+    epic = ", ".join(epics)
+    return f"this is {domain} code, but {ticket} is about {epic}"
+
+
+def alignment_gap_guidance(alignment: dict, pr: dict, suggestions: list[dict] | None = None) -> dict | None:
+    """Plain-language GAP hint plus a longer how-to for the info popover."""
+    if alignment.get("alignment") != "GAPS":
+        return None
+    stories = [s for s in (alignment.get("linked_stories") or []) if s.get("key")]
+    files = [f for f in (alignment.get("files") or []) if not f.get("aligned")]
+    if not files:
+        files = list(alignment.get("files") or [])
+    paths = _unique([str(f.get("path") or "") for f in files])
+    domains = _unique([str(f.get("domain") or "unknown") for f in files])
+    services = _unique([str(f.get("microservice") or "") for f in files])
+    pr_n = pr.get("number") or alignment.get("pr_number") or "?"
+    title = pr.get("title") or "this pull request"
+    service_label = ", ".join(f"`{s}`" for s in services) or "the changed service"
+    domain_label = ", ".join(domains) or "this area"
+    file_list = ", ".join(f"`{p}`" for p in paths) or "the changed files"
+    suggestions = list(suggestions or [])
+    best = suggestions[0] if suggestions else None
+    best_key = html_escape(str(best.get("key"))) if best else None
+    best_title = html_escape(str(best.get("title") or "")) if best else ""
+    best_why = html_escape("; ".join(best.get("reasons") or [])) if best else ""
+
+    suggest_html = ""
+    suggest_fix = ""
+    if best:
+        alts = suggestions[1:]
+        alt_html = ""
+        if alts:
+            bits = ", ".join(
+                f"{html_escape(str(a.get('key')))} ({html_escape(str(a.get('title') or ''))})"
+                for a in alts
+            )
+            alt_html = f'<div class="gs-alts">Also considered: {bits}</div>'
+        suggest_html = (
+            '<div class="gap-suggest">'
+            '<div class="gs-kicker">Best matching Jira ticket</div>'
+            f'<div class="gs-key">{best_key}</div>'
+            f'<div class="gs-title">{best_title}</div>'
+            f'<div class="gs-why">{best_why}</div>'
+            f"{alt_html}"
+            "</div>"
+        )
+        suggest_fix = (
+            f"Put {best.get('key')} in the GitHub PR title, then re-run analysis. "
+            "AEGIS will sync GitHub into Neo4j and link that ticket."
+        )
+
+    details_suggest = ""
+    if best:
+        details_suggest = (
+            f"\n\n### Best matching Jira ticket\n\n"
+            f"**{best.get('key')}** — {html_escape(str(best.get('title')))}\n\n"
+            f"- Epic: `{html_escape(str(best.get('epic') or '—'))}`\n"
+            f"- Status: `{html_escape(str(best.get('status') or '—'))}`\n"
+            f"- Why it fits: {html_escape('; '.join(best.get('reasons') or []))}\n\n"
+            "AEGIS scored live Jira issues against this PR's GitHub title and files "
+            "(product area + shared words). Put that key in the GitHub title and re-run."
+        )
+
+    if not stories:
+        return {
+            "title": "This pull request has no Jira ticket",
+            "body": (
+                f"PR #{html_escape(str(pr_n))} changes <b>{html_escape(domain_label)}</b> code, "
+                "but AEGIS cannot see a Jira story for that work. Without a ticket, it cannot "
+                "tell whether the change is in scope — so it flags a gap and will not approve."
+            ),
+            "fix": suggest_fix or (
+                "To resolve: put the matching Jira key in the GitHub PR title, "
+                "then re-run analysis. AEGIS will update Neo4j from GitHub."
+            ),
+            "suggest_html": suggest_html,
+            "details": (
+                f"### What went wrong\n\n"
+                f"**PR #{pr_n}** — {html_escape(str(title))}\n\n"
+                f"- Changed files: {file_list}\n"
+                f"- Service: {service_label} ({domain_label})\n"
+                f"- Linked Jira story: none\n\n"
+                "AEGIS compares each changed file's service area with the epic of the "
+                "Jira story on the PR. No story means every file looks unaccounted for.\n\n"
+                "### How to fix it\n\n"
+                "1. Use the suggested Jira ticket below (or pick another in the same product area).\n"
+                f"2. Put that key in the GitHub PR title.\n"
+                "3. Re-run analysis — AEGIS syncs the GitHub title into Neo4j and links the ticket.\n\n"
+                "You do not need to change the code — only attach the right ticket."
+                f"{details_suggest}"
+            ),
+        }
+
+    story_bits = ", ".join(
+        f"{s.get('key')} ({s.get('epic') or 'no epic'})" for s in stories
+    )
+    return {
+        "title": "The linked Jira ticket does not match this code",
+        "body": (
+            f"The files in PR #{html_escape(str(pr_n))} belong to "
+            f"<b>{html_escape(domain_label)}</b>, but the linked ticket is "
+            f"<b>{html_escape(story_bits)}</b>. AEGIS treats that as the wrong work item."
+        ),
+        "fix": suggest_fix or (
+            f"To resolve: link this PR to a Jira story whose epic is "
+            f"{html_escape(domain_label)} (same product area as the files). "
+            "Leave the code as-is, then re-run analysis."
+        ),
+        "suggest_html": suggest_html,
+        "details": (
+            f"### What went wrong\n\n"
+            f"**PR #{pr_n}** — {html_escape(str(title))}\n\n"
+            f"- Changed files: {file_list}\n"
+            f"- Those files live in {service_label} (**{domain_label}**)\n"
+            f"- Linked Jira: {html_escape(story_bits)}\n\n"
+            "A file is aligned only when its service area matches the epic of a "
+            "linked Jira story.\n\n"
+            "### How to fix it\n\n"
+            "1. Switch the PR to the suggested Jira ticket (or another whose epic "
+            f"is **{html_escape(domain_label)}**).\n"
+            "2. Put that key in the GitHub PR title, then re-run analysis.\n"
+            "3. Alignment should switch from GAPS to ALIGNED if the epic matches "
+            "— the code itself does not need to change.\n\n"
+            "If the files really are out of scope for the ticket, split them into "
+            "a separate PR instead of forcing the link."
+            f"{details_suggest}"
+        ),
+    }
+
+
 def run_analysis(pr_number: int, use_llm: bool) -> AegisReport:
     return AegisOrchestrator().analyze_pr(pr_number, use_llm=use_llm)
+
+
+@st.cache_data(show_spinner=False, ttl=600)
+def run_analysis_cached(pr_number: int, use_llm: bool) -> AegisReport:
+    """Cached LLM path only. Fast mode stays live so graph edits show immediately."""
+    return run_analysis(pr_number, use_llm)
 
 
 NODE_LABELS = {
@@ -998,16 +1414,16 @@ def load_llm_health() -> tuple[list[tuple], bool]:
     try:
         llm = OllamaClient()
         models = llm.list_models()
-        if llm.is_model_available():
-            return [
-                ("Ollama", "ok"),
-                ("Models", ", ".join(models)),
-                ("Active model", llm.model),
-            ], True
-        return [
+        rows = [
             ("Ollama", "ok"),
-            (f"Model '{llm.model}' not pulled yet", "warn"),
-        ], False
+            ("Endpoint", llm.base_url),
+            ("Models", ", ".join(models) or "—"),
+            ("Active model", llm.model),
+        ]
+        if llm.is_model_available():
+            return rows, True
+        rows.append((f"Model '{llm.model}' not pulled yet", "warn"))
+        return rows, False
     except Exception as exc:
         return [(f"Ollama: {exc}", "bad")], False
 
@@ -1032,7 +1448,7 @@ def platform_readiness(
 
 
 def load_pr_options() -> dict[int, str]:
-    """Pull-request picker for the analysis tab."""
+    """Pull-request picker. Titles are refreshed from GitHub during analysis."""
     try:
         cig = CIGClient()
         try:
@@ -1100,7 +1516,7 @@ with tab_health:
                     gauge_html(
                         readiness,
                         "Platform readiness",
-                        variant=score_variant(readiness),
+                        variant="ok",
                         foot=readiness_note,
                     ),
                     sub="graph · model · incidents",
@@ -1133,69 +1549,56 @@ with tab_health:
             unsafe_allow_html=True,
         )
 
-    top_rels = sorted(rels.items(), key=lambda kv: -kv[1])[:6]
-    # CIG has no ship-frequency series; each point is services linked via RELEASED_IN.
-    footprint = [len(rel.get("services") or []) for rel in releases]
-    latest = releases[-1]["version"] if releases else "—"
+    st.markdown('<div class="kicker">Stack status</div>', unsafe_allow_html=True)
     st.markdown(
-        panel_grid_html(
-            [
-                panel_html(
-                    "Relationship density",
-                    meters_html([(rel, count) for rel, count in top_rels], variant="violet"),
-                    sub=f"{sum(rels.values())} edges traversable",
-                    tag="edges",
-                ),
-                panel_html(
-                    "Services per release",
-                    sparkline_html(footprint, variant="ok"),
-                    sub=f"microservices shipped in each version · latest {latest}",
-                    tag="releases",
-                ),
-            ],
-            ratio="r-2",
-        ),
+        '<div class="stack-pair">'
+        + status_rows_html("Neo4j — Connected Intelligence Graph", neo4j_rows)
+        + status_rows_html("Ollama — Local LLM", ollama_rows)
+        + "</div>",
         unsafe_allow_html=True,
     )
 
-    col_stat, col_graph = st.columns([1, 1], gap="large")
-    with col_stat:
-        st.markdown('<div class="kicker">Stack status</div>', unsafe_allow_html=True)
-        st.markdown(
-            status_rows_html("Neo4j — Connected Intelligence Graph", neo4j_rows)
-            + status_rows_html("Ollama — Local LLM", ollama_rows),
-            unsafe_allow_html=True,
+    st.markdown('<div class="kicker">CrewAI agents</div>', unsafe_allow_html=True)
+    st.caption("Seven AIDLC roles, one local LLM, orchestrated by CrewAI.")
+    crew_blocks = []
+    for spec in AGENT_SPECS:
+        crew_blocks.append(
+            f'<details class="crew-agent">'
+            f'<summary>'
+            f'<span class="crew-title">{html_escape(spec["role"])}</span>'
+            f'<span class="crew-dot">·</span>'
+            f'<code class="crew-id">{html_escape(spec["name"])}</code>'
+            f'</summary>'
+            f'<div class="crew-body">'
+            f'<div><b>Goal:</b> {html_escape(spec["goal"])}</div>'
+            f'<div style="margin-top:6px"><b>Backstory:</b> {html_escape(spec["backstory"])}</div>'
+            f'</div></details>'
         )
+    st.markdown(
+        f'<div class="crew-grid">{"".join(crew_blocks)}</div>',
+        unsafe_allow_html=True,
+    )
 
-        st.markdown('<div class="kicker">CrewAI agents</div>', unsafe_allow_html=True)
-        st.caption("Seven AIDLC roles, one local LLM, orchestrated by CrewAI.")
-        for spec in AGENT_SPECS:
-            with st.expander(f"{spec['role']}  ·  `{spec['name']}`"):
-                st.markdown(f"**Goal:** {spec['goal']}")
-                st.markdown(f"**Backstory:** {spec['backstory']}")
+    if open_inc:
+        st.markdown('<div class="kicker">Open incidents</div>', unsafe_allow_html=True)
+        for inc in open_inc:
+            st.markdown(
+                f'<span class="chip bad">{inc["id"]} · S{inc["severity"]} · '
+                f'{inc["service"]} · {inc["root_cause"]}</span>',
+                unsafe_allow_html=True,
+            )
 
-    with col_graph:
-        if open_inc:
-            st.markdown('<div class="kicker">Open incidents</div>', unsafe_allow_html=True)
-            for inc in open_inc:
-                st.markdown(
-                    f'<span class="chip bad">{inc["id"]} · S{inc["severity"]} · '
-                    f'{inc["service"]} · {inc["root_cause"]}</span>',
-                    unsafe_allow_html=True,
-                )
-
-        st.markdown('<div class="kicker">Release timeline</div>', unsafe_allow_html=True)
-        if releases:
-            st.markdown('<div class="timeline">', unsafe_allow_html=True)
-            for rel in reversed(releases):
-                st.markdown(
-                    f'<div class="rel"><div class="ver">{rel["version"]} '
-                    f'<span class="chip ok">live</span></div>'
-                    f'<div class="sub">{rel["deployed_at"]} · {rel["notes"]} · '
-                    f'{", ".join(rel["services"]) or "—"}</div></div>',
-                    unsafe_allow_html=True,
-                )
-            st.markdown("</div>", unsafe_allow_html=True)
+    if releases:
+        st.markdown('<div class="timeline">', unsafe_allow_html=True)
+        for rel in reversed(releases):
+            st.markdown(
+                f'<div class="rel"><div class="ver">{rel["version"]} '
+                f'<span class="chip ok">live</span></div>'
+                f'<div class="sub">{rel["deployed_at"]} · {rel["notes"]} · '
+                f'{", ".join(rel["services"]) or "—"}</div></div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
 
 options = load_pr_options()
 
@@ -1204,6 +1607,7 @@ with tab_analyze:
         "Pull request",
         list(options.keys()),
         format_func=lambda n: f"#{n} — {options[n]}",
+        key="pr_select",
     )
 
     fast = st.toggle(
@@ -1214,23 +1618,38 @@ with tab_analyze:
     )
 
     if st.button("Run AEGIS analysis", type="primary"):
-        with st.spinner(
-            "Fast path: computing over the CIG..." if fast
-            else "Agents reasoning over the CIG (local LLM)..."
-        ):
-            try:
-                report = run_analysis(pr_number, use_llm=not fast)
-            except Exception as exc:
-                st.error(f"Analysis failed: {exc}")
-                report = None
+        if not pr_number:
+            st.warning("No pull request in the graph. Run `python scripts/seed_graph.py` first.")
+        else:
+            with st.spinner(
+                "Syncing this PR from GitHub into Neo4j, then analyzing..."
+                if fast
+                else "Syncing GitHub into Neo4j, then agents reasoning over the CIG..."
+            ):
+                try:
+                    run_analysis_cached.clear()
+                    report = run_analysis(pr_number, use_llm=not fast)
+                except Exception as exc:
+                    st.error(f"Analysis failed: {exc}")
+                    report = None
+            posted = None
+            if report:
+                gh_target = resolve_github_pr_number(report.pr_number)
+                with st.spinner(f"Posting AEGIS report to GitHub PR #{gh_target}..."):
+                    posted = maybe_post_report(report)
+            st.session_state["aegis_report"] = report
+            st.session_state["aegis_posted"] = posted
+            st.session_state["aegis_report_pr"] = pr_number
 
+    report = st.session_state.get("aegis_report")
+    posted = st.session_state.get("aegis_posted")
+    if report is None or st.session_state.get("aegis_report_pr") != pr_number:
+        report = None
         posted = None
-        if report:
-            gh_target = resolve_github_pr_number(report.pr_number)
-            with st.spinner(f"Posting AEGIS report to GitHub PR #{gh_target}..."):
-                posted = maybe_post_report(report)
 
-        if report:
+    if not report:
+        st.caption("Pick a pull request and click **Run AEGIS analysis** to see the verdict.")
+    else:
             st.markdown(
                 f'<div class="glass pr-head" style="margin-bottom:22px">'
                 f'<span class="num">#{report.pr_number}</span>'
@@ -1282,8 +1701,7 @@ with tab_analyze:
             st.markdown('<div class="kicker">Agent outputs</div>', unsafe_allow_html=True)
             st.markdown(agent_diagram_html(report), unsafe_allow_html=True)
             st.markdown(
-                '<div class="section-note">Synthesis of the six PR analyst agents plus the '
-                'orchestrator (Deployment Advisor runs on release workflows only).</div>',
+                '<div class="section-note">One line per agent. Expand a row for the full note.</div>',
                 unsafe_allow_html=True,
             )
 
@@ -1291,6 +1709,23 @@ with tab_analyze:
             confidence = min(max(report.merge_confidence, 0.0), 100.0)
             regression = min(max(report.regression_probability * 100.0, 0.0), 100.0)
             alignment_label = report.agent_outputs.get("alignment", "GAPS")
+            breakdown = (report.deterministic_features or {}).get("breakage_breakdown") or {}
+            agent_labels = {
+                "pr_reviewer": "PR Reviewer",
+                "security": "Security",
+                "blast_radius": "Blast Radius",
+                "risk_analyzer": "Risk Analyzer",
+                "test_selector": "Test Selector",
+            }
+            risk_bits = [
+                f"{label} {100 * float(breakdown[key]):.0f}%"
+                for key, label in agent_labels.items()
+                if float(breakdown.get(key) or 0) > 0.004
+            ]
+            risk_foot = "Formula from all PR analysts, not a single model guess"
+            if risk_bits:
+                risk_foot += " · " + " + ".join(risk_bits)
+            risk_foot += f" · safe-to-merge score {confidence:.0f}%"
             st.markdown(
                 panel_grid_html(
                     [
@@ -1304,15 +1739,12 @@ with tab_analyze:
                         f'{"LLM agents" if report.mode == "full" else "deterministic"} mode</div>'
                         f"</div>",
                         panel_html(
-                            "Breakage likelihood",
+                            "Risk Score",
                             gauge_html(
                                 regression,
-                                "Breakage likelihood",
-                                variant=score_variant(regression, invert=True),
-                                foot=(
-                                    f"Estimated chance this change breaks production · "
-                                    f"safe-to-merge score {confidence:.0f}%"
-                                ),
+                                "Risk Score",
+                                variant="red",
+                                foot=risk_foot,
                             ),
                             tag="risk",
                             tall=True,
@@ -1325,19 +1757,42 @@ with tab_analyze:
 
             st.markdown('<div class="kicker">Requirements alignment</div>', unsafe_allow_html=True)
             alignment = report.story_alignment
+            stories = alignment.get("linked_stories") or []
             if alignment.get("files"):
                 for f in alignment["files"]:
                     variant = "ok" if f["aligned"] else "bad"
+                    reason = friendly_file_reason(f, stories)
                     st.markdown(
                         f'<span class="chip {variant}">{"✓" if f["aligned"] else "✗"} '
-                        f'{f["path"]} · {f["reason"]}</span>',
+                        f'{html_escape(str(f["path"]))} · {html_escape(reason)}</span>',
                         unsafe_allow_html=True,
                     )
-                if alignment["alignment"] == "GAPS":
-                    st.warning(
-                        "Misaligned files found: the PR touches code that does not match "
-                        "the epic of its linked stories. Human review required."
-                    )
+                guidance = alignment_gap_guidance(
+                    alignment, report.pr or {}, getattr(report, "story_suggestions", None) or [],
+                )
+                if guidance:
+                    hint_col, info_col = st.columns([0.9, 0.1], vertical_alignment="center")
+                    with hint_col:
+                        st.markdown(
+                            '<div class="gap-hint">'
+                            '<div class="gap-kicker">How to resolve this gap</div>'
+                            f'<div class="gap-title">{html_escape(guidance["title"])}</div>'
+                            f'<div class="gap-body">{guidance["body"]}</div>'
+                            f'{guidance.get("suggest_html") or ""}'
+                            f'<div class="gap-fix"><b>Fix:</b> {guidance["fix"]}</div>'
+                            "</div>",
+                            unsafe_allow_html=True,
+                        )
+                    with info_col:
+                        with st.popover(
+                            "i",
+                            help="More detail on why this is a gap and how to fix it",
+                            use_container_width=True,
+                        ):
+                            st.markdown(
+                                f'<div class="gap-howto">{guidance["details"]}</div>',
+                                unsafe_allow_html=True,
+                            )
             else:
                 st.info("No changed files mapped to the graph.")
 
@@ -1495,10 +1950,13 @@ with tab_analyze:
                 unsafe_allow_html=True,
             )
 
-            st.markdown('<div class="kicker">Data provenance</div>', unsafe_allow_html=True)
-            st.markdown(provenance_html(report), unsafe_allow_html=True)
+            query_count = len((report.provenance or {}).get("queries") or [])
+            with st.expander(f"Data provenance · {query_count} Cypher queries", expanded=False):
+                st.markdown(provenance_html(report), unsafe_allow_html=True)
 
-            with st.expander("What do these numbers mean?"):
+            with st.expander("What do these numbers mean?", expanded=False):
+                st.markdown(risk_score_formula_markdown())
+                st.markdown("---")
                 for term, meaning in GLOSSARY.items():
                     st.markdown(f"**{term}** — {meaning}")
 

@@ -32,6 +32,25 @@ _SECURITY_MARKERS = (
     "rbac", "acl", "cert", "keystore",
 )
 
+# Risk Score above this (1%) can never receive APPROVE.
+APPROVE_MAX_REGRESSION = 0.01
+# Scores never claim certainty: breakage and confidence cap at 98%.
+SCORE_MAX = 0.98
+CONFIDENCE_MAX = 98.0
+# Quality risks the graph topology does not see. These are added on top
+# of churn / blast-radius math so a GAPS or security PR cannot look "1%".
+# Quality / agent weights. Risk Score is a published sum, not a free LLM guess.
+GAP_RISK = 0.25
+SECURITY_REVIEW_RISK = 0.20
+SECURITY_FAIL_RISK = 0.35
+BLAST_EXTRA_SERVICE = 0.10
+BLAST_FLOW_RISK = 0.10
+BLAST_INCIDENT_RISK = 0.15
+RISK_CHURN_CAP = 0.15
+LLM_RISK_WEIGHT = 0.25
+TEST_UNCOVERED_RISK = 0.10
+TEST_NONE_RISK = 0.08
+
 
 @dataclass
 class AegisReport:
@@ -46,6 +65,7 @@ class AegisReport:
     pr: dict = field(default_factory=dict)
     stories: list = field(default_factory=list)
     story_alignment: dict = field(default_factory=dict)
+    story_suggestions: list = field(default_factory=list)
     suite_stats: dict = field(default_factory=dict)
     provenance: dict = field(default_factory=dict)
     mode: str = "full"
@@ -60,16 +80,140 @@ def _extract_number(text: str, label: str, fallback: float | None) -> float | No
     return fallback
 
 
-def deterministic_regression(features: dict) -> float:
-    """Fallback regression probability from graph features alone."""
-    p = 0.0
-    p += min(0.15, features.get("churn", 0) / 1000.0)
-    p += 0.10 * max(0, features.get("num_affected_services", 1) - 1)
-    p += 0.15 * len(features.get("past_incidents", []))
-    p += 0.10 if features.get("affected_flows") else 0.0
-    if features.get("file_test_coverage_ratio", 0.0) >= 1.0:
-        p -= 0.05
-    return max(0.05, min(0.95, p))
+def alignment_gap_ratio(story_alignment: dict | None) -> float:
+    """0–1 share of changed files that do not match the linked Jira story."""
+    data = story_alignment or {}
+    files = data.get("files") or []
+    if not files:
+        return 1.0 if data.get("alignment") == "GAPS" else 0.0
+    return sum(1 for item in files if not item.get("aligned")) / len(files)
+
+
+def topology_risk(features: dict) -> float:
+    """Blast Radius + Risk Analyzer graph terms (no alignment/security)."""
+    return (
+        _blast_radius_term(features)
+        + _risk_analyzer_term(features, llm_regression=None)
+        + _test_selector_term(features, recommended_tests=None)
+    )
+
+
+def quality_risk(
+    *,
+    alignment: str = "ALIGNED",
+    security: str = "PASS",
+    gap_ratio: float = 0.0,
+) -> float:
+    """PR Reviewer + Security Analyst terms."""
+    return _reviewer_term(alignment, gap_ratio) + _security_term(security)
+
+
+def _reviewer_term(alignment: str, gap_ratio: float) -> float:
+    if (alignment or "").upper() != "GAPS":
+        return 0.0
+    ratio = gap_ratio if gap_ratio > 0.0 else 1.0
+    return GAP_RISK * min(1.0, ratio)
+
+
+def _security_term(security: str) -> float:
+    level = (security or "PASS").upper()
+    if level == "FAIL":
+        return SECURITY_FAIL_RISK
+    if level == "REVIEW":
+        return SECURITY_REVIEW_RISK
+    return 0.0
+
+
+def _blast_radius_term(features: dict) -> float:
+    extra = max(0, int(features.get("num_affected_services", 1) or 1) - 1)
+    p = BLAST_EXTRA_SERVICE * extra
+    if features.get("affected_flows"):
+        p += BLAST_FLOW_RISK
+    p += BLAST_INCIDENT_RISK * len(features.get("past_incidents") or [])
+    return p
+
+
+def _risk_analyzer_term(features: dict, llm_regression: float | None) -> float:
+    churn = min(RISK_CHURN_CAP, float(features.get("churn", 0) or 0) / 1000.0)
+    llm = 0.0
+    if llm_regression is not None:
+        llm = LLM_RISK_WEIGHT * max(0.0, min(1.0, float(llm_regression)))
+    return churn + llm
+
+
+def _test_selector_term(features: dict, recommended_tests: list | None) -> float:
+    coverage = float(features.get("file_test_coverage_ratio", 0.0) or 0.0)
+    p = TEST_UNCOVERED_RISK * max(0.0, 1.0 - min(1.0, coverage))
+    files = int(features.get("num_files", 0) or 0)
+    if recommended_tests is not None and files > 0 and len(recommended_tests) == 0:
+        p += TEST_NONE_RISK
+    if coverage >= 1.0 and (recommended_tests is None or recommended_tests):
+        p = max(0.0, p - 0.05)
+    return p
+
+
+def breakage_parts(
+    features: dict,
+    *,
+    alignment: str = "ALIGNED",
+    security: str = "PASS",
+    recommended_tests: list | None = None,
+    llm_regression: float | None = None,
+) -> dict[str, float]:
+    """Per-agent contributions that sum to Risk Score.
+
+    Deployment Advisor is release-only and is not part of PR Risk Score.
+    The Orchestrator verdict is derived from this score plus hard rails;
+    it is not a separate additive term (that would double-count).
+    """
+    gap_ratio = float(features.get("alignment_gap_ratio") or 0.0)
+    if (alignment or "").upper() == "GAPS" and gap_ratio <= 0.0:
+        gap_ratio = 1.0
+    parts = {
+        "pr_reviewer": round(_reviewer_term(alignment, gap_ratio), 4),
+        "security": round(_security_term(security), 4),
+        "blast_radius": round(_blast_radius_term(features), 4),
+        "risk_analyzer": round(_risk_analyzer_term(features, llm_regression), 4),
+        "test_selector": round(_test_selector_term(features, recommended_tests), 4),
+    }
+    return parts
+
+
+def breakage_likelihood(
+    features: dict,
+    *,
+    alignment: str = "ALIGNED",
+    security: str = "PASS",
+    recommended_tests: list | None = None,
+    llm_regression: float | None = None,
+) -> float:
+    """Crew formula for Risk Score: sum of PR-analyst terms, clamped to [0, 98%]."""
+    parts = breakage_parts(
+        features,
+        alignment=alignment,
+        security=security,
+        recommended_tests=recommended_tests,
+        llm_regression=llm_regression,
+    )
+    return max(0.0, min(SCORE_MAX, sum(parts.values())))
+
+
+def deterministic_regression(
+    features: dict,
+    *,
+    alignment: str = "ALIGNED",
+    security: str = "PASS",
+    recommended_tests: list | None = None,
+    llm_regression: float | None = None,
+) -> float:
+    """Risk Score from every PR analyst signal (formula, not a guess)."""
+    return breakage_likelihood(
+        features,
+        alignment=alignment,
+        security=security,
+        recommended_tests=recommended_tests,
+        llm_regression=llm_regression,
+    )
 
 
 def deterministic_security(files: list[dict], *, past_incidents: list | None = None) -> dict:
@@ -130,14 +274,15 @@ def deterministic_verdict(
     """Deterministic go/no-go used in fast mode and as a safety fallback.
 
     Confidence is merge confidence (higher = safer); alignment GAPS never
-    ships without a human review loop. Security FAIL blocks; REVIEW prevents
-    a clean APPROVE.
+    APPROVE — a missing or mismatched Jira story is a hard stop. Security
+    FAIL blocks; REVIEW prevents a clean APPROVE. Risk Score above
+    1% also prevents APPROVE.
     """
     if security == "FAIL":
         return "REJECT"
-    if alignment == "GAPS" and regression >= 0.4:
+    if alignment == "GAPS":
         return "REJECT"
-    if security == "REVIEW":
+    if security == "REVIEW" or regression > APPROVE_MAX_REGRESSION:
         if confidence >= 50:
             return "REVIEW"
         return "REJECT"
@@ -171,6 +316,8 @@ class AegisOrchestrator:
         features = queries.risk_features(self.cig, pr_number)
         tests = queries.recommended_tests(self.cig, pr_number)
         alignment = queries.story_alignment(self.cig, pr_number)
+        features["alignment"] = alignment.get("alignment")
+        features["alignment_gap_ratio"] = alignment_gap_ratio(alignment)
         total_tests = queries.suite_size(self.cig)
         recommended = len(tests)
         return {
@@ -216,17 +363,25 @@ class AegisOrchestrator:
             raw.get(ROLE_SECURITY_ANALYST, ""), fallback=det_security["level"]
         )
 
-        deterministic = deterministic_regression(features)
-        regression = (
-            0.6 * llm_regression + 0.4 * deterministic
-            if llm_regression is not None
-            else deterministic
-        )
-        confidence = llm_confidence if llm_confidence is not None else 100.0 * (1 - regression)
-        confidence = max(5.0, min(95.0, confidence))
-
         alignment_raw = raw.get(ROLE_PR_REVIEWER, "")
         alignment = "ALIGNED" if "ALIGNED" in alignment_raw.upper() else "GAPS"
+        graph_alignment = (context.get("story_alignment") or {}).get("alignment")
+        if graph_alignment == "GAPS":
+            alignment = "GAPS"
+
+        gap_ratio = alignment_gap_ratio(context.get("story_alignment"))
+        features["alignment_gap_ratio"] = gap_ratio
+        tests = context.get("recommended_tests") or []
+        parts = breakage_parts(
+            features,
+            alignment=alignment,
+            security=security,
+            recommended_tests=tests,
+            llm_regression=llm_regression,
+        )
+        features["breakage_breakdown"] = parts
+        regression = max(0.0, min(SCORE_MAX, sum(parts.values())))
+        confidence = max(0.0, min(CONFIDENCE_MAX, 100.0 * (1 - regression)))
 
         synthesis_raw = raw.get(ROLE_ORCHESTRATOR, "")
         upper = synthesis_raw.upper()
@@ -239,10 +394,13 @@ class AegisOrchestrator:
         else:
             verdict = "REVIEW"
 
-        # Hard safety rails: security FAIL/REVIEW can never be waved into APPROVE.
-        if security == "FAIL":
+        # Hard safety rails: GAPS / security FAIL never APPROVE.
+        # Risk Score above 1% never APPROVE.
+        if security == "FAIL" or alignment == "GAPS":
             verdict = "REJECT"
-        elif security == "REVIEW" and verdict == "APPROVE":
+        elif verdict == "APPROVE" and (
+            security == "REVIEW" or regression > APPROVE_MAX_REGRESSION
+        ):
             verdict = "REVIEW"
 
         return {
@@ -257,19 +415,52 @@ class AegisOrchestrator:
 
     def analyze_pr(self, pr_number: int, *, use_llm: bool = True,
                    verbose: bool = False) -> AegisReport:
+        from aegis.graph.recommend import suggest_jira_for_pr
+        from aegis.graph.sync import SyncError, refresh_jira_stories, refresh_pull_request
+        from aegis.integrations.github_client import github_configured
+        from aegis.integrations.jira_client import jira_configured
+
+        if jira_configured():
+            try:
+                refresh_jira_stories(self.cig)
+            except SyncError:
+                pass
+        if github_configured():
+            try:
+                refresh_pull_request(self.cig, pr_number)
+            except SyncError as exc:
+                raise RuntimeError(
+                    f"Could not sync GitHub PR #{pr_number} into Neo4j: {exc}"
+                ) from exc
+
         context = self._gather_pr_context(pr_number)
+        suggestions = suggest_jira_for_pr(self.cig, context)
         features = context["risk_features"]
-        regression = round(deterministic_regression(features), 3)
-        deterministic_conf = round(100 * (1 - regression), 1)
         det_alignment = context["story_alignment"]["alignment"]
+        security = deterministic_security(
+            context.get("files") or [],
+            past_incidents=features.get("past_incidents"),
+        )
+        regression = round(
+            deterministic_regression(
+                features,
+                alignment=det_alignment,
+                security=security["level"],
+                recommended_tests=context.get("recommended_tests") or [],
+            ),
+            3,
+        )
+        features["breakage_breakdown"] = breakage_parts(
+            features,
+            alignment=det_alignment,
+            security=security["level"],
+            recommended_tests=context.get("recommended_tests") or [],
+        )
+        deterministic_conf = round(min(CONFIDENCE_MAX, 100 * (1 - regression)), 1)
 
         if not use_llm:
             confidence = deterministic_conf
             alignment = det_alignment
-            security = deterministic_security(
-                context.get("files") or [],
-                past_incidents=features.get("past_incidents"),
-            )
             verdict = deterministic_verdict(
                 confidence, alignment, regression, security=security["level"]
             )
@@ -284,6 +475,7 @@ class AegisOrchestrator:
                 pr=context["pr"],
                 stories=context["stories"],
                 story_alignment=context["story_alignment"],
+                story_suggestions=suggestions,
                 suite_stats=context["suite_stats"],
                 provenance=context["provenance"],
                 mode="fast",
@@ -316,6 +508,7 @@ class AegisOrchestrator:
             pr=context["pr"],
             stories=context["stories"],
             story_alignment=context["story_alignment"],
+            story_suggestions=suggestions,
             suite_stats=context["suite_stats"],
             provenance=context["provenance"],
             mode="full",
@@ -366,7 +559,7 @@ class AegisOrchestrator:
         decision = "GO" if "DEPLOYMENT=GO" in advisor_raw.upper() else "WAIT"
         readiness = _extract_number(
             raw.get(ROLE_RISK_ANALYZER, ""), "RELEASE_READINESS",
-            max(5.0, min(95.0, 100 * (1 - deterministic_regression(features)))),
+            max(0.0, min(CONFIDENCE_MAX, 100 * (1 - deterministic_regression(features)))),
         )
         return {
             "version": version,
@@ -393,6 +586,10 @@ def format_report(report: AegisReport) -> str:
             "security": report.agent_outputs.get("security"),
             "story_alignment": report.story_alignment.get("alignment"),
             "linked_stories": [s["key"] for s in report.stories],
+            "suggested_jira": [
+                {"key": s.get("key"), "title": s.get("title"), "score": s.get("score")}
+                for s in (getattr(report, "story_suggestions", None) or [])
+            ],
             "suite_stats": report.suite_stats,
             "mode": report.mode,
             "provenance": {

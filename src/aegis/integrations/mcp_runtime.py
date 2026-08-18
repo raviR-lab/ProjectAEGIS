@@ -128,6 +128,55 @@ def parse_tool_payload(result: Any) -> Any:
         return raw
 
 
+def _stdio_params(command: str, args: list[str], env: dict[str, str]):
+    from mcp import StdioServerParameters
+
+    binary = command.split()[0] if command else ""
+    if not shutil.which(binary) and not shutil.which(command):
+        raise McpError(
+            f"MCP command not found: {command}. "
+            "Install Node.js (for npx) in the AEGIS runtime."
+        )
+    merged_env = {k: v for k, v in os.environ.items() if k in ALLOWED_SPAWN_ENV}
+    merged_env.update({k: str(v) for k, v in env.items() if v is not None})
+    return StdioServerParameters(command=command, args=args, env=merged_env)
+
+
+async def _call_tools_async(
+    *,
+    command: str,
+    args: list[str],
+    env: dict[str, str],
+    calls: list[tuple[str, dict[str, Any] | None]],
+    timeout: float = DEFAULT_TIMEOUT,
+) -> list[Any]:
+    """One npx/MCP spawn, many tool calls (avoids a cold start per tool)."""
+    from mcp import ClientSession
+    from mcp.client.stdio import stdio_client
+
+    if not calls:
+        return []
+    params = _stdio_params(command, args, env)
+    labels = ", ".join(name for name, _ in calls)
+
+    async def _inner():
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                out = []
+                for tool, arguments in calls:
+                    result = await session.call_tool(tool, arguments or {})
+                    out.append(parse_tool_payload(result))
+                return out
+
+    try:
+        return await asyncio.wait_for(_inner(), timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        raise McpError(
+            f"MCP tools [{labels}] timed out after {timeout:.0f}s"
+        ) from exc
+
+
 async def _call_tool_async(
     *,
     command: str,
@@ -137,39 +186,14 @@ async def _call_tool_async(
     arguments: dict[str, Any] | None = None,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> Any:
-    from mcp import ClientSession, StdioServerParameters
-    from mcp.client.stdio import stdio_client
-
-    binary = command.split()[0] if command else ""
-    if not shutil.which(binary) and not shutil.which(command):
-        raise McpError(
-            f"MCP command not found: {command}. "
-            "Install Node.js (for npx) in the AEGIS runtime."
-        )
-
-    # Pass only a whitelist of host env vars + the injected MCP credentials.
-    # Host secrets in os.environ must never reach the npm subprocess.
-    merged_env = {
-        k: v
-        for k, v in os.environ.items()
-        if k in ALLOWED_SPAWN_ENV
-    }
-    merged_env.update({k: str(v) for k, v in env.items() if v is not None})
-    params = StdioServerParameters(command=command, args=args, env=merged_env)
-
-    async def _inner():
-        async with stdio_client(params) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                result = await session.call_tool(tool, arguments or {})
-                return parse_tool_payload(result)
-
-    try:
-        return await asyncio.wait_for(_inner(), timeout=timeout)
-    except asyncio.TimeoutError as exc:
-        raise McpError(
-            f"MCP tool '{tool}' timed out after {timeout:.0f}s"
-        ) from exc
+    results = await _call_tools_async(
+        command=command,
+        args=args,
+        env=env,
+        calls=[(tool, arguments)],
+        timeout=timeout,
+    )
+    return results[0]
 
 
 def call_mcp_tool(
@@ -189,6 +213,27 @@ def call_mcp_tool(
             tool=tool,
             arguments=arguments,
             timeout=timeout,
+        )
+    )
+
+
+def call_mcp_tools(
+    *,
+    command: str,
+    args: list[str],
+    env: dict[str, str],
+    calls: list[tuple[str, dict[str, Any] | None]],
+    timeout: float | None = None,
+) -> list[Any]:
+    n = max(1, len(calls))
+    wait = timeout if timeout is not None else max(DEFAULT_TIMEOUT, 15.0 * n)
+    return _run_async(
+        _call_tools_async(
+            command=command,
+            args=args,
+            env=env,
+            calls=calls,
+            timeout=wait,
         )
     )
 
@@ -438,6 +483,31 @@ def call_github_tool(tool: str, arguments: dict[str, Any] | None = None) -> Any:
         tool=tool,
         arguments=arguments,
     )
+
+
+def call_github_tools(calls: list[tuple[str, dict[str, Any] | None]]) -> list[Any]:
+    """Several GitHub MCP tools on one spawned server."""
+    cmd, args, env, _package = github_mcp_command()
+    if not env.get("GITHUB_PERSONAL_ACCESS_TOKEN"):
+        raise McpError("GITHUB_TOKEN missing for GitHub MCP server")
+
+    def _run():
+        for tool, _arguments in calls:
+            rate_limit_check("github")
+        return call_mcp_tools(command=cmd, args=args, env=env, calls=calls)
+
+    start = time.monotonic()
+    err: str | None = None
+    ok = True
+    try:
+        return _run()
+    except Exception as exc:
+        ok = False
+        err = str(exc)
+        raise
+    finally:
+        label = "+".join(name for name, _ in calls) or "batch"
+        _audit("github", label, None, ok, err, (time.monotonic() - start) * 1000.0)
 
 
 def call_jira_tool(tool: str, arguments: dict[str, Any] | None = None) -> Any:

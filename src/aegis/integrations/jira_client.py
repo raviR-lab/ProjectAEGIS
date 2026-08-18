@@ -43,6 +43,20 @@ def project_key() -> str:
     return (config.setting("JIRA_PROJECT_KEY", "AEG") or "AEG").upper()
 
 
+def _issues_from_search(data: Any) -> list[dict]:
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if not isinstance(data, dict):
+        return []
+    for key in ("issues", "values", "data", "result"):
+        val = data.get(key)
+        if isinstance(val, list):
+            return [item for item in val if isinstance(item, dict)]
+        if isinstance(val, dict) and isinstance(val.get("issues"), list):
+            return [item for item in val["issues"] if isinstance(item, dict)]
+    return []
+
+
 def _require_settings() -> tuple[str, str, str]:
     base = config.setting("JIRA_BASE_URL").rstrip("/")
     email = config.setting("JIRA_EMAIL")
@@ -161,6 +175,80 @@ class JiraClient:
             if exc.status == 404:
                 return None
             raise
+
+    def get_issue(self, key: str) -> dict | None:
+        try:
+            return self.request("GET", f"/rest/api/3/issue/{quote(key)}")
+        except JiraError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+    def search_issues(
+        self,
+        jql: str,
+        *,
+        max_results: int = 50,
+        fields: str | None = None,
+    ) -> list[dict]:
+        """Return Jira issues matching JQL (live Cloud search via MCP)."""
+        field_list = fields or (
+            "summary,status,issuetype,parent,labels,components,"
+            "customfield_10011,customfield_10014,customfield_10016"
+        )
+        data: Any = None
+        try:
+            data = self.request(
+                "GET",
+                "/rest/api/3/search/jql",
+                query={
+                    "jql": jql,
+                    "maxResults": max_results,
+                    "fields": field_list,
+                },
+            )
+        except JiraError:
+            data = self.request(
+                "POST",
+                "/rest/api/3/search",
+                body={
+                    "jql": jql,
+                    "maxResults": max_results,
+                    "fields": [f.strip() for f in field_list.split(",") if f.strip()],
+                },
+            )
+        return _issues_from_search(data)
+
+    def create_issue(
+        self,
+        *,
+        summary: str,
+        description: str,
+        issuetype: str = "Story",
+        labels: list[str] | None = None,
+    ) -> dict:
+        """Create a Jira issue in JIRA_PROJECT_KEY via MCP."""
+        fields: dict[str, Any] = {
+            "project": {"key": project_key()},
+            "summary": summary,
+            "issuetype": {"name": issuetype},
+            "description": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": description}],
+                    }
+                ],
+            },
+        }
+        if labels:
+            fields["labels"] = labels
+        data = self.request("POST", "/rest/api/3/issue", body={"fields": fields})
+        if isinstance(data, dict):
+            return data
+        return {"raw": data}
 
 
 def connection_status() -> dict[str, Any]:

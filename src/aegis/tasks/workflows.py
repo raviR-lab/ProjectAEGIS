@@ -77,7 +77,10 @@ def build_pr_tasks(agents: dict[str, object], context: dict) -> list[Task]:
         description=(
             "Compute regression risk for PR #%(number)d from these deterministic features:\n"
             "%(features)s\n\n"
-            "Return the two required numbers plus a one-sentence reason."
+            "Raise REGRESSION_PROBABILITY when alignment is GAPS, when blast radius "
+            "is wide, when tests do not cover the change, or when paths are "
+            "security-sensitive. Your number is one input: AEGIS then combines "
+            "every PR analyst with a fixed formula."
         ) % {"number": pr["number"], "features": _fmt(features)},
         expected_output=(
             "Output exactly these lines:\n"
@@ -107,7 +110,8 @@ def build_pr_tasks(agents: dict[str, object], context: dict) -> list[Task]:
             "risk, tests) into a final verdict for PR #%(number)d. "
             "The PR changes: %(files)s\n\n"
             "If SECURITY=FAIL, prefer REJECT. If SECURITY=REVIEW, do not APPROVE "
-            "without a human security check."
+            "without a human security check. If REGRESSION_PROBABILITY is above 0.01 "
+            "(1%), do not APPROVE."
         ) % {"number": pr["number"], "files": _fmt(files)},
         expected_output=(
             "Final line 'VERDICT=APPROVE' | 'VERDICT=REVIEW' | 'VERDICT=REJECT', then a "
