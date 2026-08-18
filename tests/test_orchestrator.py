@@ -6,6 +6,7 @@ from aegis.core.orchestrator import (
     AegisReport,
     _extract_number,
     deterministic_regression,
+    deterministic_security,
     deterministic_verdict,
     format_report,
 )
@@ -64,6 +65,38 @@ class DeterministicVerdictTest(unittest.TestCase):
 
     def test_low_confidence_reject(self):
         self.assertEqual(deterministic_verdict(20.0, "ALIGNED", 0.8), "REJECT")
+
+    def test_security_review_blocks_approve(self):
+        self.assertEqual(
+            deterministic_verdict(95.0, "ALIGNED", 0.05, security="REVIEW"), "REVIEW"
+        )
+
+    def test_security_fail_rejects(self):
+        self.assertEqual(
+            deterministic_verdict(95.0, "ALIGNED", 0.05, security="FAIL"), "REJECT"
+        )
+
+
+class DeterministicSecurityTest(unittest.TestCase):
+    def test_auth_path_needs_review(self):
+        result = deterministic_security(
+            [{"path": "auth-svc/src/token.ts", "microservice": "auth-svc"}]
+        )
+        self.assertEqual(result["level"], "REVIEW")
+        self.assertIn("token", result["findings"])
+
+    def test_plain_payment_passes(self):
+        result = deterministic_security(
+            [{"path": "payment-svc/src/refund.py", "microservice": "payment-svc"}]
+        )
+        self.assertEqual(result["level"], "PASS")
+
+    def test_sensitive_with_incidents_fails(self):
+        result = deterministic_security(
+            [{"path": "auth-svc/src/token.py", "microservice": "auth-svc"}],
+            past_incidents=["INC-3301"],
+        )
+        self.assertEqual(result["level"], "FAIL")
 
 
 class FormatReportTest(unittest.TestCase):

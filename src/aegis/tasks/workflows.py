@@ -10,7 +10,7 @@ def _fmt(obj) -> str:
 
 
 def build_pr_tasks(agents: dict[str, object], context: dict) -> list[Task]:
-    """Five sequential tasks: review, blast, risk, test selection, synthesis."""
+    """Analyst tasks (incl. security) run in parallel; orchestrator synthesizes."""
     pr = context["pr"]
     files = context["files"]
     radius = context["blast_radius"]
@@ -32,6 +32,29 @@ def build_pr_tasks(agents: dict[str, object], context: dict) -> list[Task]:
             "list of unrelated files or missing-requirement gaps."
         ),
         agent=agents["pr_reviewer"],
+        async_execution=True,
+    )
+
+    t_security = Task(
+        description=(
+            "Security review for PR #%(number)d '%(title)s'.\n"
+            "Changed files:\n%(files)s\n\n"
+            "Past incidents in blast radius:\n%(incidents)s\n\n"
+            "Look for auth, token, secret, key, crypto, credential, permission or "
+            "access-control changes. Decide if a security review is required."
+        ) % {
+            "number": pr["number"],
+            "title": pr["title"],
+            "files": _fmt(files),
+            "incidents": _fmt(features.get("past_incidents", [])),
+        },
+        expected_output=(
+            "Output exactly these lines:\n"
+            "SECURITY=PASS | SECURITY=REVIEW | SECURITY=FAIL\n"
+            "FINDINGS=<short bullet-style findings or 'none'>\n"
+            "REASON=<one sentence>"
+        ),
+        agent=agents["security_analyst"],
         async_execution=True,
     )
 
@@ -80,18 +103,21 @@ def build_pr_tasks(agents: dict[str, object], context: dict) -> list[Task]:
 
     t_synthesis = Task(
         description=(
-            "Synthesize the four analyst reports into a final verdict for PR #%(number)d. "
-            "The PR changes: %(files)s"
+            "Synthesize the five analyst reports (compliance, security, blast radius, "
+            "risk, tests) into a final verdict for PR #%(number)d. "
+            "The PR changes: %(files)s\n\n"
+            "If SECURITY=FAIL, prefer REJECT. If SECURITY=REVIEW, do not APPROVE "
+            "without a human security check."
         ) % {"number": pr["number"], "files": _fmt(files)},
         expected_output=(
             "Final line 'VERDICT=APPROVE' | 'VERDICT=REVIEW' | 'VERDICT=REJECT', then a "
             "two-sentence summary the developer can act on."
         ),
         agent=agents["orchestrator"],
-        context=[t_review, t_blast, t_risk, t_test],
+        context=[t_review, t_security, t_blast, t_risk, t_test],
     )
 
-    return [t_review, t_blast, t_risk, t_test, t_synthesis]
+    return [t_review, t_security, t_blast, t_risk, t_test, t_synthesis]
 
 
 def build_deployment_tasks(agents: dict[str, object], context: dict) -> list[Task]:

@@ -1,4 +1,4 @@
-"""CrewAI agent definitions - the six AIDLC roles sharing one local LLM."""
+"""CrewAI agent definitions - AIDLC roles sharing one local LLM."""
 
 from crewai import Agent
 
@@ -21,6 +21,15 @@ AGENT_SPECS = [
              "Jira stories it links to, and surface any gaps or scope creep.",
         backstory="Senior code reviewer. You map changed files to story acceptance "
                   "criteria and flag changes that do not belong.",
+    ),
+    dict(
+        name="security_analyst",
+        role="Security Analyst",
+        goal="Flag security-sensitive changes — auth, secrets, crypto, access control — "
+             "and judge whether the PR needs a security review before merge.",
+        backstory="Application security engineer embedded in the release crew. You "
+                  "treat signing keys, tokens, credentials and permission changes as "
+                  "high-signal risk and never rubber-stamp them.",
     ),
     dict(
         name="risk_analyzer",

@@ -21,7 +21,6 @@ for _mod_name in (
     "aegis.integrations.jenkins_client",
     "aegis.integrations.teams_client",
     "aegis.ui.mcp_panel",
-    "aegis.ui.bot_preview",
 ):
     if _mod_name in sys.modules:
         importlib.reload(sys.modules[_mod_name])
@@ -34,7 +33,6 @@ from aegis.graph import queries
 from aegis.graph.neo4j import CIGClient
 from aegis.integrations.github_comments import maybe_post_report, resolve_github_pr_number
 from aegis.llm.ollama import OllamaClient
-from aegis.ui.bot_preview import bot_dock_script
 from aegis.ui.mcp_panel import render_mcp_panel
 
 st.set_page_config(page_title="Project AEGIS", layout="wide")
@@ -42,7 +40,7 @@ st.set_page_config(page_title="Project AEGIS", layout="wide")
 st.markdown(
     """
     <style>
-      @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+      @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap');
 
       :root {
         --bg: #070b14;
@@ -76,12 +74,39 @@ st.markdown(
       [data-testid="stHeader"] { background: transparent; }
       [data-testid="stToolbar"] { right: 1rem; }
 
+      /* ---------- page rhythm (Streamlit stacks blocks tightly by default) ---------- */
+      section.main > div.block-container {
+        padding-top: 1.75rem !important;
+        padding-bottom: 3.5rem !important;
+        max-width: 1180px;
+      }
+      [data-testid="stVerticalBlock"] { gap: 1.15rem; }
+      [data-testid="stHorizontalBlock"] {
+        align-items: stretch;
+        gap: 1.35rem !important;
+      }
+      [data-testid="stTabs"] [data-testid="stVerticalBlock"] {
+        gap: 1.25rem;
+        padding-top: 0.85rem;
+      }
+      [data-testid="stMarkdownContainer"] p { margin-bottom: 0.65rem; }
+      [data-testid="stCaptionContainer"] {
+        margin-top: -0.15rem;
+        margin-bottom: 0.65rem;
+      }
+      [data-testid="stSelectbox"],
+      [data-testid="stToggle"],
+      [data-testid="stButton"] { margin-bottom: 0.35rem; }
+      [data-testid="stDataFrame"] { margin: 0.65rem 0 1.1rem; }
+      div[data-testid="stExpander"] { margin: 0.5rem 0 0.85rem; }
+      hr { margin: 1.75rem 0 !important; border-color: var(--border); }
+
       html, body, [class*="css"] {
-        font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       }
       .mono, code, pre { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace !important; }
 
-      .hero { padding: 6px 0 2px; }
+      .hero { padding: 6px 0 2px; margin-bottom: 18px; }
       .hero .title { font-size: 42px; font-weight: 700; letter-spacing: -1px; line-height: 1.05;
                      background: var(--grad); -webkit-background-clip: text; background-clip: text;
                      -webkit-text-fill-color: transparent;
@@ -102,11 +127,11 @@ st.markdown(
                     box-shadow: 0 0 0 1px rgba(120,190,255,.06), 0 0 34px rgba(34,211,238,.08); }
 
       /* Equal-height cards that wrap instead of squeezing on narrow screens. */
-      .sgrid { display:grid; gap:14px; align-items:stretch; margin: 2px 0 14px;
+      .sgrid { display:grid; gap:16px; align-items:stretch; margin: 10px 0 22px;
                grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); }
 
       .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
-              padding: 14px 18px; backdrop-filter: blur(14px); position: relative;
+              padding: 16px 20px; backdrop-filter: blur(14px); position: relative;
               overflow: hidden; transition: transform .25s ease, border-color .25s ease;
               animation: riseIn .6s cubic-bezier(.2,.8,.2,1) both;
               height:100%; display:flex; flex-direction:column; }
@@ -127,22 +152,25 @@ st.markdown(
       .stat.accent .value { background: var(--grad); -webkit-background-clip:text;
                             background-clip:text; -webkit-text-fill-color:transparent; }
 
-      .badge { display:inline-block; border-radius:10px; padding:5px 16px; font-weight:700;
-               font-size:15px; letter-spacing:1px; color:#06121f; }
+      .badge { display:inline-flex; align-items:center; justify-content:center;
+               border-radius:10px; padding:8px 18px; font-weight:700;
+               font-size:15px; letter-spacing:1px; line-height:1.1; color:#06121f; }
       .badge.approve { background: linear-gradient(120deg,#34d399,#22d3ee); }
       .badge.review { background: linear-gradient(120deg,#fbbf24,#fb923c); }
       .badge.reject { background: linear-gradient(120deg,#fb7185,#ef4444); }
 
-      .chip { display:inline-block; background: rgba(44,62,110,.35); color:#c8d6f0;
-              border:1px solid rgba(120,150,220,.22); border-radius:999px;
-              padding:2px 12px; margin:2px 6px 2px 0; font-size:12.5px; }
+      .chip { display:inline-flex; align-items:center; background: rgba(44,62,110,.35);
+              color:#c8d6f0; border:1px solid rgba(120,150,220,.22); border-radius:999px;
+              padding:4px 12px; margin:3px 8px 3px 0; font-size:12.5px; line-height:1.25; }
       .chip.ok { background: rgba(52,211,153,.14); color:#7ff0c6; border-color: rgba(52,211,153,.35); }
       .chip.warn { background: rgba(251,191,36,.13); color:#ffd98a; border-color: rgba(251,191,36,.35); }
       .chip.bad { background: rgba(251,113,133,.13); color:#ffb3c1; border-color: rgba(251,113,133,.35); }
 
       .kicker { color: var(--muted); font-size:11px; font-weight:700; letter-spacing:2.5px;
-                text-transform: uppercase; margin: 8px 0 2px; }
-      .section-title { font-size:20px; font-weight:600; margin: 6px 0 10px; }
+                text-transform: uppercase; margin: 30px 0 12px; }
+      .kicker:first-of-type { margin-top: 10px; }
+      .section-title { font-size:20px; font-weight:600; margin: 6px 0 14px; }
+      .section-note { color:var(--muted); font-size:12.5px; margin: -6px 0 16px; line-height:1.5; }
 
       .pr-head { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; }
       .pr-head .num { font-size:26px; font-weight:800;
@@ -152,7 +180,7 @@ st.markdown(
       .pr-head .meta { color: var(--muted); font-size:13px; }
 
       .agent { background: var(--panel); border:1px solid var(--border); border-radius:14px;
-               padding: 12px 16px; margin-bottom: 10px; backdrop-filter: blur(10px);
+               padding: 14px 18px; margin-bottom: 14px; backdrop-filter: blur(10px);
                border-left-width:3px; }
       .agent.ok { border-left-color: var(--green); }
       .agent.warn { border-left-color: var(--amber); }
@@ -165,7 +193,8 @@ st.markdown(
       .agent .out { color:#b7c4de; font-size:12.5px; margin-top:6px; white-space:pre-wrap;
                     font-family:'JetBrains Mono', monospace; }
 
-      .chain { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+      .chain { display:flex; align-items:center; flex-wrap:wrap; gap:10px;
+                margin: 6px 0 18px; }
       .chain .hop { background: rgba(44,62,110,.35); border:1px solid var(--border);
                     border-radius:12px; padding:7px 14px; font-weight:600; font-size:13.5px; }
       .chain .hop.ok { border-color: rgba(52,211,153,.5); color:#7ff0c6; }
@@ -175,7 +204,7 @@ st.markdown(
       .chain .arr { color: var(--muted); font-weight:700; }
 
       .provenance { border:1px dashed rgba(120,190,255,.28); border-radius:14px;
-                    padding: 14px 18px; background: rgba(13,27,58,.25); }
+                    padding: 16px 20px; background: rgba(13,27,58,.25); margin-bottom: 8px; }
       .provenance .q { color:#8fb7dd; font-size:12px; font-family:'JetBrains Mono',monospace;
                        margin:4px 0; white-space:pre-wrap; }
       .provenance .qline { color: var(--muted); font-size:11.5px; margin-top:6px; }
@@ -198,15 +227,64 @@ st.markdown(
 
       [data-testid="stDataFrame"] { border:1px solid var(--border); border-radius:12px;
                                     overflow:hidden; }
-      button[kind="primary"] { background: var(--grad); color:#06121f; font-weight:700;
-                               border:none; }
-      button[kind="primary"]:hover { filter: brightness(1.1); }
+
+      /* Streamlit buttons — label text often sits in nested <p> tags and misaligns */
+      [data-testid="stButton"] button,
+      [data-testid="stFormSubmitButton"] button,
+      [data-testid="stDownloadButton"] button {
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+        font-weight: 600 !important;
+        font-size: 0.92rem !important;
+        line-height: 1.2 !important;
+        letter-spacing: 0.01em;
+        border-radius: 10px !important;
+        padding: 0.58rem 1.15rem !important;
+        min-height: 2.55rem;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        white-space: nowrap;
+      }
+      [data-testid="stButton"] button p,
+      [data-testid="stFormSubmitButton"] button p,
+      [data-testid="stDownloadButton"] button p,
+      [data-testid="stButton"] button div[data-testid="stMarkdownContainer"],
+      [data-testid="stFormSubmitButton"] button div[data-testid="stMarkdownContainer"] {
+        margin: 0 !important;
+        padding: 0 !important;
+        line-height: 1.2 !important;
+        font-size: inherit !important;
+        font-weight: inherit !important;
+        color: inherit !important;
+      }
+      [data-testid="stButton"] button[kind="primary"],
+      [data-testid="stFormSubmitButton"] button[kind="primary"],
+      button[kind="primary"] {
+        background: var(--grad) !important;
+        color: #06121f !important;
+        border: none !important;
+        box-shadow: 0 0 0 1px rgba(34,211,238,.12);
+      }
+      [data-testid="stButton"] button[kind="primary"]:hover,
+      [data-testid="stFormSubmitButton"] button[kind="primary"]:hover,
+      button[kind="primary"]:hover { filter: brightness(1.08); }
+      [data-testid="stButton"] button:not([kind="primary"]),
+      [data-testid="stFormSubmitButton"] button:not([kind="primary"]) {
+        background: rgba(13, 19, 33, 0.88) !important;
+        color: var(--text) !important;
+        border: 1px solid var(--border-bright) !important;
+      }
+      [data-testid="stButton"] button:disabled,
+      [data-testid="stFormSubmitButton"] button:disabled {
+        opacity: 0.45;
+      }
+
       .stProgress > div > div > div { background: var(--grad); }
       hr { border-color: var(--border); }
 
       /* ---------- futuristic telemetry deck ---------- */
       .panel { position:relative; border:1px solid var(--border); border-radius:18px;
-               padding:16px 18px 14px; margin-bottom:14px; overflow:hidden;
+               padding:18px 20px 16px; margin-bottom:20px; overflow:hidden;
                background: linear-gradient(160deg, rgba(19,28,50,.92), rgba(9,14,26,.78));
                box-shadow: 0 14px 44px rgba(0,0,0,.45);
                animation: riseIn .65s cubic-bezier(.2,.8,.2,1) both; }
@@ -224,20 +302,20 @@ st.markdown(
                        animation: sheen 8s ease-in-out infinite; }
       @keyframes sheen { 0%,58% { left:-55%; } 100% { left:135%; } }
       .panel.tall { min-height: 268px; }
-      .panel-head { display:flex; align-items:baseline; gap:10px; margin-bottom:14px;
+      .panel-head { display:flex; align-items:center; gap:12px; margin-bottom:16px;
                     flex-wrap:wrap; }
-      .panel-title { font-size:14px; font-weight:600; letter-spacing:.2px; }
-      .panel-sub { color:var(--muted); font-size:11.5px; min-width:0; }
+      .panel-title { font-size:14px; font-weight:600; letter-spacing:.2px; line-height:1.3; }
+      .panel-sub { color:var(--muted); font-size:11.5px; min-width:0; line-height:1.35; }
       .panel-tag { margin-left:auto; flex:0 0 auto; font-size:10px; font-weight:700;
-                   letter-spacing:1.4px;
+                   letter-spacing:1.4px; line-height:1.2;
                    text-transform:uppercase; color:#8fb7dd; border:1px solid var(--border);
-                   border-radius:999px; padding:3px 10px; }
+                   border-radius:999px; padding:5px 10px; display:inline-flex; align-items:center; }
       /* Body fills the leftover height so charts centre and panel floors line up. */
       .panel-body { flex:1 1 auto; min-width:0; display:flex; flex-direction:column;
                     justify-content:center; }
 
       /* Panels in a row: equal height, and they wrap rather than shrink to nothing. */
-      .pgrid { display:grid; gap:18px; align-items:stretch; margin-bottom:14px;
+      .pgrid { display:grid; gap:22px; align-items:stretch; margin: 8px 0 24px;
                grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
       .pgrid > .panel { height:100%; margin-bottom:0; display:flex; flex-direction:column; }
       .pgrid.r-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -246,12 +324,12 @@ st.markdown(
 
       .gauge-wrap { display:flex; justify-content:center; }
       .gauge { width:100%; max-width:250px; overflow:visible; }
-      .gauge .gnum { font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:46px;
+      .gauge .gnum { font-family:'Plus Jakarta Sans',sans-serif; font-weight:700; font-size:46px;
                      fill:#eef4ff; }
-      .gauge .gsuf { font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:17px;
-                     fill:#7a8ba8; }
-      .gauge .gcap { font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:10.5px;
-                     fill:#7a8ba8; letter-spacing:2.2px; }
+      .gauge .gsuf { font-family:'Plus Jakarta Sans',sans-serif; font-weight:600; font-size:17px;
+                     fill:#7a8ba8; baseline-shift: super; }
+      .gauge .gcap { font-family:'Plus Jakarta Sans',sans-serif; font-weight:600; font-size:10px;
+                     fill:#7a8ba8; letter-spacing:1.6px; }
       @keyframes gaugeFill { from { stroke-dashoffset: var(--dash-len); }
                              to   { stroke-dashoffset: var(--dash-off); } }
       .gauge .val { animation: gaugeFill 1.35s cubic-bezier(.2,.8,.2,1) both,
@@ -270,7 +348,8 @@ st.markdown(
       @keyframes tipPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.28); } }
       @keyframes tipRing { 0% { opacity:.55; transform: scale(.7); }
                            100% { opacity:0; transform: scale(2.5); } }
-      .gauge-foot { text-align:center; color:var(--muted); font-size:12px; margin-top:2px; }
+      .gauge-foot { text-align:center; color:var(--muted); font-size:12px;
+                    margin-top:8px; line-height:1.45; padding: 0 6px; }
 
       .cb { display:flex; align-items:flex-end; gap:10px; }
       .cb-item { flex:1; min-width:0; text-align:center; }
@@ -289,7 +368,7 @@ st.markdown(
       .cb-lab { color:var(--muted); font-size:10.5px; margin-top:7px; white-space:nowrap;
                 overflow:hidden; text-overflow:ellipsis; }
 
-      .mt { margin-bottom:11px; }
+      .mt { margin-bottom:14px; }
       .mt:last-child { margin-bottom:0; }
       .mt-top { display:flex; justify-content:space-between; align-items:baseline;
                 font-size:12.5px; margin-bottom:5px; color:#c8d6f0; gap:10px; }
@@ -323,7 +402,7 @@ st.markdown(
                              100% { opacity:0; transform: translateX(284px); } }
 
       /* continuously scrolling telemetry strip */
-      .ticker { position:relative; overflow:hidden; margin:12px 0 6px; padding:9px 0;
+      .ticker { position:relative; overflow:hidden; margin:16px 0 22px; padding:11px 0;
                 border:1px solid var(--border); border-radius:12px;
                 background: rgba(9,14,26,.6);
                 mask-image: linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent);
@@ -348,111 +427,7 @@ st.markdown(
       @keyframes alertPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(251,113,133,0); }
                               50% { box-shadow: 0 0 0 4px rgba(251,113,133,.12); } }
 
-      /* the dock's loader iframe should occupy no space in the page flow */
-      .st-key-botdock_mount { height:0 !important; min-height:0 !important;
-                              margin:0 !important; padding:0 !important;
-                              overflow:hidden !important; gap:0 !important; }
-      .st-key-botdock_mount iframe { height:0 !important; min-height:0 !important;
-                                     border:0 !important; display:block; }
-
-      /* docked PR-bot mockup: bottom-right, collapsible, drag-resizable */
-      .botdock { position:fixed; right:22px; bottom:22px; z-index:100000;
-                 width:380px; height:520px; display:flex; flex-direction:column;
-                 font-family:'Space Grotesk', system-ui, sans-serif; color:var(--text);
-                 background: rgba(10,15,27,.93); border:1px solid var(--border-bright);
-                 border-radius:18px; overflow:hidden; backdrop-filter: blur(18px);
-                 box-shadow: 0 26px 70px rgba(0,0,0,.62), 0 0 34px rgba(34,211,238,.07);
-                 animation: dockIn .55s cubic-bezier(.2,.8,.2,1) both; }
-      @keyframes dockIn { from { opacity:0; transform: translateY(18px) scale(.97); } }
-      .botdock.resizing { animation:none; }
-
-      .bd-grip { position:absolute; top:0; left:0; width:20px; height:20px; z-index:4;
-                 cursor: nwse-resize; touch-action:none; }
-      .bd-grip::before { content:""; position:absolute; top:7px; left:7px; width:7px; height:7px;
-                         border-top:2px solid rgba(120,190,255,.5);
-                         border-left:2px solid rgba(120,190,255,.5); border-radius:3px 0 0 0; }
-      .bd-grip:hover::before { border-color: var(--cyan); }
-
-      .bd-head { flex:0 0 auto; display:flex; align-items:center; gap:11px;
-                 padding:12px 14px 12px 22px; cursor:pointer; user-select:none;
-                 border-bottom:1px solid var(--border); background: rgba(9,14,26,.6); }
-      .bd-who { min-width:0; }
-      .bd-caret { flex:0 0 auto; color:var(--muted); font-size:12px;
-                  transition: transform .25s ease; }
-      .bot-ava { width:31px; height:31px; border-radius:10px; flex:0 0 auto;
-                 display:flex; align-items:center; justify-content:center;
-                 background: var(--grad); color:#06121f; font-weight:800; font-size:11.5px;
-                 letter-spacing:.5px; box-shadow: 0 0 18px rgba(34,211,238,.28); }
-      .bot-id { font-weight:600; font-size:14px; }
-      .bot-sub { color:var(--muted); font-size:11px; white-space:nowrap;
-                 overflow:hidden; text-overflow:ellipsis; }
-      .bot-flag { margin-left:auto; flex:0 0 auto; color:#ffd98a; font-size:9.5px;
-                  letter-spacing:1.6px; text-transform:uppercase;
-                  border:1px solid rgba(251,191,36,.35);
-                  background: rgba(251,191,36,.1); border-radius:999px; padding:3px 10px; }
-
-      .bd-thread { flex:1 1 auto; min-height:0; overflow-y:auto; padding:16px 16px 10px;
-                   display:flex; flex-direction:column; gap:11px;
-                   background:
-                     radial-gradient(520px 260px at 92% 0%, rgba(167,139,250,.07), transparent 62%); }
-      .bd-thread::-webkit-scrollbar { width:8px; }
-      .bd-thread::-webkit-scrollbar-track { background: transparent; }
-      .bd-thread::-webkit-scrollbar-thumb { background: rgba(120,150,220,.26); border-radius:8px; }
-
-      .turn { display:flex; animation: riseIn .55s cubic-bezier(.2,.8,.2,1) both; }
-      .turn.me { justify-content:flex-end; }
-      .bubble { max-width:90%; padding:10px 14px; border-radius:16px; font-size:13px;
-                line-height:1.55; border:1px solid var(--border);
-                background: rgba(20,28,48,.72); color:var(--text); }
-      .turn.me .bubble { max-width:82%; border-color: rgba(120,190,255,.3); color:#eef4ff;
-                         background: linear-gradient(120deg, rgba(34,211,238,.16), rgba(167,139,250,.16)); }
-      .bubble p { margin:0 0 6px; }
-      .bubble p:last-child { margin-bottom:0; }
-      .bubble .b-title { font-weight:600; font-size:12px; color:#eef4ff;
-                         letter-spacing:.3px; margin-bottom:5px; }
-      .bubble ul { margin:2px 0 6px; padding-left:17px; }
-      .bubble li { margin:1px 0; }
-      .bubble code { font-family:'JetBrains Mono',monospace; font-size:11px;
-                     background: rgba(120,150,220,.14); border-radius:5px; padding:1px 5px; }
-      .bot-chips { margin-top:6px; }
-      .bubble.typing { display:flex; gap:5px; padding:13px 15px; }
-      .bubble.typing i { width:6px; height:6px; border-radius:50%; background:var(--cyan);
-                         animation: typeDot 1.3s ease-in-out infinite; }
-      .bubble.typing i:nth-child(2) { animation-delay:.18s; }
-      .bubble.typing i:nth-child(3) { animation-delay:.36s; }
-      @keyframes typeDot { 0%,100% { opacity:.25; transform: translateY(0); }
-                           45% { opacity:1; transform: translateY(-3px); } }
-
-      .bd-composer { flex:0 0 auto; display:flex; align-items:center; gap:9px; padding:11px 13px;
-                     border-top:1px solid var(--border); background: rgba(9,14,26,.6); }
-      .bd-input { flex:1; min-width:0; font-family:inherit; font-size:12.5px;
-                  color:var(--text); padding:9px 13px; border:1px solid var(--border);
-                  border-radius:12px; background: rgba(7,11,20,.65); outline:none;
-                  transition: border-color .2s ease, box-shadow .2s ease; }
-      .bd-input::placeholder { color:var(--muted); }
-      .bd-input:focus { border-color: var(--border-bright);
-                        box-shadow: 0 0 0 3px rgba(34,211,238,.1); }
-      .bd-send { flex:0 0 auto; font-family:inherit; font-size:12px; font-weight:700;
-                 color:#06121f; background: var(--grad); border:0; border-radius:12px;
-                 padding:10px 16px; cursor:pointer;
-                 transition: opacity .2s ease, transform .15s ease; }
-      .bd-send:hover:not(:disabled) { transform: translateY(-1px); }
-      .bd-send:disabled { cursor:default; opacity:.4; transform:none; }
-
-      .botdock.collapsed { width:auto !important; height:auto !important; border-radius:999px; }
-      .botdock.collapsed .bd-head { border-bottom:none; padding:9px 15px; }
-      .botdock.collapsed .bd-grip, .botdock.collapsed .bd-thread,
-      .botdock.collapsed .bd-composer, .botdock.collapsed .bot-sub,
-      .botdock.collapsed .bot-flag { display:none; }
-      .botdock.collapsed .bd-caret { transform: rotate(180deg); }
-
-      @media (max-width: 680px) {
-        .botdock { left:12px; right:12px; bottom:12px; width:auto !important; }
-        .botdock.collapsed { left:auto !important; }
-      }
-
       /* ---------- responsive layout ---------- */
-      [data-testid="stHorizontalBlock"] { align-items: stretch; }
 
       @media (max-width: 1180px) {
         .pgrid.r-3 { grid-template-columns: repeat(auto-fit, minmax(258px, 1fr)); }
@@ -480,10 +455,11 @@ st.markdown(
       }
 
       .verdict-panel { text-align:center; display:flex; flex-direction:column;
-                       align-items:center; justify-content:center; gap:10px; min-height:268px; }
+                       align-items:center; justify-content:center; gap:12px;
+                       min-height:268px; padding: 8px 12px; }
       .verdict-panel .badge { font-size:22px; padding:10px 30px; border-radius:14px; }
       .verdict-panel .vlabel { color:var(--muted); font-size:10.5px; letter-spacing:2.2px;
-                               text-transform:uppercase; }
+                               text-transform:uppercase; line-height:1.2; margin-bottom:4px; }
       .verdict-panel .vsub { color:#c8d6f0; font-size:13px; }
 
       .conn-card { background: var(--panel); border:1px solid var(--border); border-radius:18px;
@@ -506,8 +482,9 @@ st.markdown(
       .conn-glyph.teams { background:#6264A7; }
       .conn-name { font-weight:700; font-size:16px; }
       .conn-via { color: var(--muted); font-size:12px; margin-top:1px; }
-      .conn-pill { margin-left:auto; border-radius:999px; padding:4px 12px; font-size:11px;
-                   font-weight:700; letter-spacing:.8px; text-transform:uppercase; }
+      .conn-pill { margin-left:auto; border-radius:999px; padding:5px 12px; font-size:11px;
+                   font-weight:700; letter-spacing:.8px; line-height:1.1;
+                   text-transform:uppercase; display:inline-flex; align-items:center; white-space:nowrap; }
       .conn-pill.ok { background: rgba(52,211,153,.16); color:#7ff0c6; border:1px solid rgba(52,211,153,.35); }
       .conn-pill.warn { background: rgba(251,191,36,.14); color:#ffd98a; border:1px solid rgba(251,191,36,.35); }
       .conn-pill.bad { background: rgba(251,113,133,.14); color:#ffb3c1; border:1px solid rgba(251,113,133,.35); }
@@ -524,6 +501,19 @@ st.markdown(
 
       .stTextInput input, .stSelectbox [data-baseweb="select"] > div {
         background: rgba(7,14,28,.55) !important; border-radius:10px !important;
+      }
+      [data-testid="stToggle"] label,
+      [data-testid="stSelectbox"] label,
+      [data-testid="stTextInput"] label {
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+        font-size: 0.92rem !important;
+        line-height: 1.35 !important;
+      }
+      [data-testid="stToggle"] label p,
+      [data-testid="stSelectbox"] label p,
+      [data-testid="stTextInput"] label p {
+        margin: 0 !important;
+        line-height: 1.35 !important;
       }
     </style>
     """,
@@ -545,9 +535,11 @@ SOURCE_LABELS = {
 }
 ROLE_ORDER = [
     ("PR Compliance Reviewer", "PR Reviewer"),
+    ("Security Analyst", "Security"),
     ("Blast Radius Analyst", "Blast Radius"),
     ("Risk Analyzer", "Risk Analyzer"),
     ("Test Selector", "Test Selector"),
+    ("Deployment Advisor", "Deployment"),
     ("AEGIS Release Orchestrator", "Orchestrator"),
 ]
 
@@ -557,12 +549,13 @@ GLOSSARY = {
     "Customer flows": "End-to-end customer journeys that touch at-risk services.",
     "Tests": "Automated tests covering files owned by that service.",
     "Past incidents": "Incidents previously logged against the service.",
-    "Merge confidence": "How safe AEGIS thinks a merge is (higher = safer).",
-    "Regression probability": "Estimated likelihood the change breaks something.",
+    "Safe-to-merge score": "How safe AEGIS thinks it is to merge this PR (higher = safer to ship).",
+    "Breakage likelihood": "Estimated chance this change breaks something in production (higher = riskier).",
     "Alignment": "Whether changed files match the Jira stories they claim to implement.",
     "Story epic": "The business capability a Jira story belongs to (Payments, Commerce, Platform).",
     "RELEASED_IN": "Relationship between a microservice and the release version it shipped in.",
     "DETECTS": "Relationship between a test case and the incident it would have caught.",
+    "Security": "Security Analyst signal: PASS (clear), REVIEW (human security look needed), FAIL (block).",
 }
 
 
@@ -599,8 +592,8 @@ def status_rows_html(title, rows) -> str:
             f"<span>{html_escape(str(label))}</span>{chip}</div>"
         )
     return (
-        f'<div class="glass glass-glow" style="margin-bottom:12px">'
-        f'<div style="font-weight:600;margin-bottom:4px">{html_escape(title)}</div>'
+        f'<div class="glass glass-glow" style="margin-bottom:16px">'
+        f'<div style="font-weight:600;margin-bottom:8px">{html_escape(title)}</div>'
         f"{''.join(parts)}</div>"
     )
 
@@ -706,9 +699,9 @@ def gauge_html(
         f'<circle class="gtip-halo" cx="{tip_x:.2f}" cy="{tip_y:.2f}" r="7" fill="{stop}"/>'
         f'<circle class="gtip" cx="{tip_x:.2f}" cy="{tip_y:.2f}" r="4" fill="#eef4ff"/>'
         f'<text class="gnum" x="100" y="99" text-anchor="middle">{html_escape(readout)}'
-        f'<tspan class="gsuf" dx="2">{html_escape(suffix)}</tspan></text>'
+        f'<tspan class="gsuf" dx="3" dy="-0.15em">{html_escape(suffix)}</tspan></text>'
         f'<text class="gcap" x="100" y="124" text-anchor="middle">'
-        f'{html_escape(caption.upper())}</text>'
+        f'{html_escape(caption)}</text>'
         '</svg></div>'
         + (f'<div class="gauge-foot">{html_escape(foot)}</div>' if foot else "")
     )
@@ -869,6 +862,11 @@ def agent_nodes(report: AegisReport) -> list[tuple[str, str, str]]:
         f"Deterministic check of {len(report.story_alignment.get('files', []))} changed file(s) vs story epics."
     )
     nodes.append(("PR Reviewer", text.strip(), "ok" if alignment == "ALIGNED" else "bad"))
+
+    security = report.agent_outputs.get("security") or "PASS"
+    text = raw.get("Security Analyst") or f"SECURITY={security}"
+    security_variant = {"PASS": "ok", "REVIEW": "warn", "FAIL": "bad"}.get(security, "warn")
+    nodes.append(("Security", text.strip(), security_variant))
 
     radius = report.blast_radius
     affected = radius.get("affected_services", [])
@@ -1050,7 +1048,9 @@ def load_pr_options() -> dict[int, str]:
     return {r["number"]: r["title"] for r in rows}
 
 
-tab_health, tab_analyze = st.tabs(["Infrastructure & CIG", "PR Analysis"])
+tab_health, tab_analyze, tab_mcps = st.tabs(
+    ["Infrastructure & CIG", "PR Analysis", "MCP Integrations"]
+)
 
 with tab_health:
     neo4j_rows, stats, releases, open_inc, graph_ok = load_graph_health()
@@ -1099,7 +1099,7 @@ with tab_health:
                     "Platform readiness",
                     gauge_html(
                         readiness,
-                        "Readiness score",
+                        "Platform readiness",
                         variant=score_variant(readiness),
                         foot=readiness_note,
                     ),
@@ -1168,7 +1168,7 @@ with tab_health:
         )
 
         st.markdown('<div class="kicker">CrewAI agents</div>', unsafe_allow_html=True)
-        st.caption("Six AIDLC roles, one local LLM, orchestrated by CrewAI.")
+        st.caption("Seven AIDLC roles, one local LLM, orchestrated by CrewAI.")
         for spec in AGENT_SPECS:
             with st.expander(f"{spec['role']}  ·  `{spec['name']}`"):
                 st.markdown(f"**Goal:** {spec['goal']}")
@@ -1196,8 +1196,6 @@ with tab_health:
                     unsafe_allow_html=True,
                 )
             st.markdown("</div>", unsafe_allow_html=True)
-
-    render_mcp_panel()
 
 options = load_pr_options()
 
@@ -1234,7 +1232,7 @@ with tab_analyze:
 
         if report:
             st.markdown(
-                f'<div class="glass pr-head" style="margin-bottom:14px">'
+                f'<div class="glass pr-head" style="margin-bottom:22px">'
                 f'<span class="num">#{report.pr_number}</span>'
                 f'<span class="title">{report.pr.get("title", "")}</span>'
                 f'<span class="meta">by {report.pr.get("author", "?")} · '
@@ -1284,8 +1282,8 @@ with tab_analyze:
             st.markdown('<div class="kicker">Agent outputs</div>', unsafe_allow_html=True)
             st.markdown(agent_diagram_html(report), unsafe_allow_html=True)
             st.markdown(
-                '<div style="font-size:11.5px;color:var(--muted)">Synthesis of the five '
-                'CrewAI agent outputs (fast mode shows deterministic reasoning).</div>',
+                '<div class="section-note">Synthesis of the six PR analyst agents plus the '
+                'orchestrator (Deployment Advisor runs on release workflows only).</div>',
                 unsafe_allow_html=True,
             )
 
@@ -1306,29 +1304,21 @@ with tab_analyze:
                         f'{"LLM agents" if report.mode == "full" else "deterministic"} mode</div>'
                         f"</div>",
                         panel_html(
-                            "Merge confidence",
-                            gauge_html(
-                                confidence,
-                                "Confidence",
-                                variant=score_variant(confidence),
-                                foot="Higher is safer to merge",
-                            ),
-                            tag="score",
-                            tall=True,
-                        ),
-                        panel_html(
-                            "Regression risk",
+                            "Breakage likelihood",
                             gauge_html(
                                 regression,
-                                "Risk score",
+                                "Breakage likelihood",
                                 variant=score_variant(regression, invert=True),
-                                foot="Likelihood this change breaks something",
+                                foot=(
+                                    f"Estimated chance this change breaks production · "
+                                    f"safe-to-merge score {confidence:.0f}%"
+                                ),
                             ),
                             tag="risk",
                             tall=True,
                         ),
                     ],
-                    ratio="r-3",
+                    ratio="r-2",
                 ),
                 unsafe_allow_html=True,
             )
@@ -1444,7 +1434,7 @@ with tab_analyze:
                             "Suite reduction",
                             gauge_html(
                                 min(max(float(reduction), 0.0), 100.0),
-                                "Suite cut",
+                                "Suite reduction",
                                 variant="ok",
                                 foot=f"{targeted} of {total} tests selected",
                             ),
@@ -1471,7 +1461,7 @@ with tab_analyze:
                 stats_grid_html([
                     ("Suite size", f"{total} tests"),
                     ("Targeted", f"{targeted} tests", "instead of the full suite"),
-                    ("Suite cut", f"{reduction:.1f}%",
+                    ("Suite reduction", f"{reduction:.1f}%",
                      f"−{max(total - targeted, 0)} tests not run", True),
                 ]),
                 unsafe_allow_html=True,
@@ -1519,7 +1509,5 @@ with tab_analyze:
             with st.expander("Raw agent output"):
                 st.json(report.agent_outputs)
 
-# The dock is mounted on the page body so it survives tab switches and reruns.
-# Its loader iframe carries no visible content; CSS collapses the space it takes.
-with st.container(key="botdock_mount"):
-    st.iframe(bot_dock_script(), height=1)
+with tab_mcps:
+    render_mcp_panel()

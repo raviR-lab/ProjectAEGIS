@@ -63,8 +63,9 @@ def format_report_markdown(report: AegisReport, *, github_pr_number: int | None 
         [
             f"**Verdict:** `{verdict}`  ",
             f"**Requirement alignment:** `{alignment}`  ",
-            f"**Merge confidence:** {report.merge_confidence:.0f}%  ",
-            f"**Regression probability:** {report.regression_probability:.0%}",
+            f"**Security:** `{(report.agent_outputs or {}).get('security', '—')}`  ",
+            f"**Safe-to-merge score:** {report.merge_confidence:.0f}%  ",
+            f"**Breakage likelihood:** {report.regression_probability:.0%}",
             "",
             "### Blast radius",
             "",

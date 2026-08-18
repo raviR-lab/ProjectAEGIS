@@ -607,7 +607,7 @@ def render_mcp_panel() -> None:
     st.markdown('<div class="kicker">Integrations · MCP</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="section-title">GitHub · Jira · Jenkins · Teams connections</div>'
-        '<div style="color:var(--muted);font-size:13.5px;margin:-4px 0 14px">'
+        '<div class="section-note">'
         "AEGIS talks to external systems only through MCP. Credentials stay in "
         "<code>.env</code> and are injected into the server process — never into REST clients. "
         "Graph analysis still works if a connection is off.</div>",

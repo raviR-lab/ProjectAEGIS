@@ -21,8 +21,16 @@ from aegis.tasks.workflows import build_deployment_tasks, build_pr_tasks
 
 ROLE_ORCHESTRATOR = "AEGIS Release Orchestrator"
 ROLE_PR_REVIEWER = "PR Compliance Reviewer"
+ROLE_SECURITY_ANALYST = "Security Analyst"
 ROLE_RISK_ANALYZER = "Risk Analyzer"
 ROLE_DEPLOYMENT_ADVISOR = "Deployment Advisor"
+
+# Path / service tokens that mark a change as security-sensitive.
+_SECURITY_MARKERS = (
+    "auth", "token", "secret", "password", "credential", "crypto", "jwt",
+    "oauth", "signing", "private_key", "apikey", "api_key", "permission",
+    "rbac", "acl", "cert", "keystore",
+)
 
 
 @dataclass
@@ -64,13 +72,74 @@ def deterministic_regression(features: dict) -> float:
     return max(0.05, min(0.95, p))
 
 
-def deterministic_verdict(confidence: float, alignment: str, regression: float) -> str:
+def deterministic_security(files: list[dict], *, past_incidents: list | None = None) -> dict:
+    """Fast-mode security signal from changed paths / services (no LLM)."""
+    hits: list[str] = []
+    for f in files or []:
+        haystack = " ".join(
+            str(f.get(k, "") or "") for k in ("path", "microservice")
+        ).lower()
+        matched = [m for m in _SECURITY_MARKERS if m in haystack]
+        if matched:
+            hits.append(f"{f.get('path', '?')} ({', '.join(matched)})")
+
+    incidents = list(past_incidents or [])
+    if hits and incidents:
+        level = "FAIL"
+        reason = (
+            "Security-sensitive paths changed and past incidents exist in scope; "
+            "block until a security review clears it."
+        )
+    elif hits:
+        level = "REVIEW"
+        reason = (
+            "Security-sensitive paths changed (auth/secrets/crypto/access); "
+            "human security review recommended."
+        )
+    else:
+        level = "PASS"
+        reason = "No security-sensitive paths detected in the changed files."
+
+    findings = "; ".join(hits) if hits else "none"
+    return {
+        "level": level,
+        "findings": findings,
+        "reason": reason,
+        "summary": f"SECURITY={level}\nFINDINGS={findings}\nREASON={reason}",
+    }
+
+
+def _parse_security_level(text: str, fallback: str = "PASS") -> str:
+    upper = (text or "").upper()
+    if "SECURITY=FAIL" in upper or "SECURITY:FAIL" in upper:
+        return "FAIL"
+    if "SECURITY=REVIEW" in upper or "SECURITY:REVIEW" in upper:
+        return "REVIEW"
+    if "SECURITY=PASS" in upper or "SECURITY:PASS" in upper:
+        return "PASS"
+    return fallback
+
+
+def deterministic_verdict(
+    confidence: float,
+    alignment: str,
+    regression: float,
+    *,
+    security: str = "PASS",
+) -> str:
     """Deterministic go/no-go used in fast mode and as a safety fallback.
 
     Confidence is merge confidence (higher = safer); alignment GAPS never
-    ships without a human review loop.
+    ships without a human review loop. Security FAIL blocks; REVIEW prevents
+    a clean APPROVE.
     """
+    if security == "FAIL":
+        return "REJECT"
     if alignment == "GAPS" and regression >= 0.4:
+        return "REJECT"
+    if security == "REVIEW":
+        if confidence >= 50:
+            return "REVIEW"
         return "REJECT"
     if confidence >= 80:
         return "APPROVE"
@@ -139,6 +208,14 @@ class AegisOrchestrator:
         llm_confidence = _extract_number(risk_raw, "MERGE_CONFIDENCE", None)
 
         features = context["risk_features"]
+        det_security = deterministic_security(
+            context.get("files") or [],
+            past_incidents=features.get("past_incidents"),
+        )
+        security = _parse_security_level(
+            raw.get(ROLE_SECURITY_ANALYST, ""), fallback=det_security["level"]
+        )
+
         deterministic = deterministic_regression(features)
         regression = (
             0.6 * llm_regression + 0.4 * deterministic
@@ -162,9 +239,16 @@ class AegisOrchestrator:
         else:
             verdict = "REVIEW"
 
+        # Hard safety rails: security FAIL/REVIEW can never be waved into APPROVE.
+        if security == "FAIL":
+            verdict = "REJECT"
+        elif security == "REVIEW" and verdict == "APPROVE":
+            verdict = "REVIEW"
+
         return {
             "raw": raw,
             "alignment": alignment,
+            "security": security,
             "llm_regression_probability": llm_regression,
             "regression_probability": round(regression, 3),
             "merge_confidence": round(confidence, 1),
@@ -182,7 +266,13 @@ class AegisOrchestrator:
         if not use_llm:
             confidence = deterministic_conf
             alignment = det_alignment
-            verdict = deterministic_verdict(confidence, alignment, regression)
+            security = deterministic_security(
+                context.get("files") or [],
+                past_incidents=features.get("past_incidents"),
+            )
+            verdict = deterministic_verdict(
+                confidence, alignment, regression, security=security["level"]
+            )
             return AegisReport(
                 pr_number=pr_number,
                 verdict=verdict,
@@ -199,8 +289,9 @@ class AegisOrchestrator:
                 mode="fast",
                 agent_outputs={
                     "alignment": alignment,
+                    "security": security["level"],
                     "mode": "deterministic",
-                    "raw": {},
+                    "raw": {ROLE_SECURITY_ANALYST: security["summary"]},
                 },
             )
 
@@ -230,6 +321,7 @@ class AegisOrchestrator:
             mode="full",
             agent_outputs={
                 "alignment": parsed["alignment"],
+                "security": parsed["security"],
                 "llm_regression_probability": parsed["llm_regression_probability"],
                 "raw": parsed["raw"],
             },
@@ -298,6 +390,7 @@ def format_report(report: AegisReport) -> str:
             "affected_flows": report.deterministic_features.get("affected_flows", []),
             "past_incidents": report.deterministic_features.get("past_incidents", []),
             "agent_alignment": report.agent_outputs.get("alignment"),
+            "security": report.agent_outputs.get("security"),
             "story_alignment": report.story_alignment.get("alignment"),
             "linked_stories": [s["key"] for s in report.stories],
             "suite_stats": report.suite_stats,
