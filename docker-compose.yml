@@ -30,7 +30,7 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command: ["ollama serve & sleep 5 && ollama pull ${OLLAMA_MODEL:-gemma2:2b} || true && wait"]
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      test: ["CMD", "ollama", "list"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -50,8 +50,12 @@ services:
     ports:
       - "8501:8501"
     volumes:
-      - ./src:/app/src
-      - ./scripts:/app/scripts
+      - ./src:/app/src:ro
+      - ./scripts:/app/scripts:ro
+      - ./docker/streamlit.toml:/home/aegis/.streamlit/config.toml:ro
+    read_only: true
+    tmpfs:
+      - /tmp
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -59,7 +63,7 @@ services:
         condition: service_healthy
       ollama:
         condition: service_started
-    command: ["streamlit", "run", "src/aegis/ui/app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+    command: ["streamlit", "run", "/app/src/aegis/ui/app.py", "--server.address=0.0.0.0", "--server.port=8501"]
 
 volumes:
   neo4j_data:

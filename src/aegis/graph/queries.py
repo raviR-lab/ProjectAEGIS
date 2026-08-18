@@ -1,7 +1,7 @@
 """Query layer - blast radius, test recommendation and risk features for a PR.
 
 All analyses are read-only traversals over the CIG. They produce the JSON
-context that the CrewAI agents (Risk Analyzer, Blast Radius, Test
+context that the CrewAI agents (Risk Analyzer, Blast Radius, Security, Test
 Recommendation) consume in the next iteration.
 """
 

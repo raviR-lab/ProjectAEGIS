@@ -56,7 +56,7 @@ aegis/
 ├── src/aegis/
 │   ├── __init__.py             # disables CrewAI telemetry for Streamlit safety
 │   ├── config.py               # env-driven config (.env)
-│   ├── agents/registry.py      # the six CrewAI agent role definitions
+│   ├── agents/registry.py      # the seven CrewAI agent role definitions
 │   ├── core/orchestrator.py    # AegisReport + deterministic fallbacks + crew wiring
 │   ├── graph/
 │   │   ├── schema.py           # node labels, relationship types, constraints
@@ -152,7 +152,7 @@ The seed is idempotent — re-run it any time to reset the demo data.
 
 Open `http://localhost:8501`:
 
-- **Infrastructure & CIG** — stack status, graph intelligence (node/relationship counts), open incidents, release timeline, and the six CrewAI agents.
+- **Infrastructure & CIG** — stack status, graph intelligence (node/relationship counts), open incidents, release timeline, and the seven CrewAI agents.
 - **PR Analysis** — pick a PR, toggle **Fast mode** (deterministic, instant) or let the agents reason over the local LLM, then inspect:
   - agent output diagram (each agent's verdict line)
   - final verdict + merge confidence + regression probability
